@@ -1,63 +1,59 @@
 # GPTAudioPlugin
 
-A local-first ChatGPT audio creation plugin.
+A UI-less ChatGPT music-generation plugin.
 
-ChatGPT remains the text reasoning layer: it turns the current conversation into a concise creative summary and a production-ready music-director prompt. GPTAudioPlugin handles Replicate account connection, model capability detection, optional reference audio, and generation.
+The main plugin deliberately does **not** provide its own recording/upload panel. Users stay in the normal ChatGPT conversation, attach an audio recording with ChatGPT's native attachment control, and ask ChatGPT to generate or continue music from the conversation plus that attachment.
 
-## v0.2 flow
+A microphone/recording UI can be developed later as a separate plugin.
+
+## v0.3 flow
 
 ```text
-ChatGPT conversation
-  ├─ conversationSummary
-  └─ directorPrompt
-          │
-          ▼
-open_audio_studio (no auth)
-          │
-          ▼
-ChatGPT plugin UI
-  ├─ Connect / Check Replicate model
-  ├─ upload or record audio when the model supports it
-  └─ review generation settings
-          │
-          ▼
-OAuth-protected MCP tools
-          │
-          ▼
-user's own Replicate account
-          │
-          ▼
-selected Replicate model
+normal ChatGPT conversation
+        +
+native ChatGPT audio attachment (optional)
+        │
+        ├─ ChatGPT creates conversationSummary
+        └─ ChatGPT creates directorPrompt
+        │
+        ▼
+generate_music(...)
+        │
+        ├─ first use -> Connect Replicate
+        ├─ inspect selected model schema
+        ├─ reject attachment if model has no audio input
+        └─ pass supported attachment to Replicate
+        │
+        ▼
+generated audio URL
 ```
 
-There is no separate OpenAI/text-model API in this architecture.
+There is no separate OpenAI/text-model API and no embedded audio widget.
+
+## Why no custom audio UI?
+
+The conversation itself is part of the creative input. A separate recording panel adds an unnecessary interaction boundary when ChatGPT already has native file attachments.
+
+The primary workflow is therefore:
+
+1. discuss the song/BGM/scene normally;
+2. attach an MP3/WAV/etc. directly to the ChatGPT message when needed;
+3. ask GPTAudioPlugin to generate music;
+4. ChatGPT combines the existing conversation context with the attachment in one tool call.
 
 ## Replicate connection
 
-Replicate currently authenticates its public API with API tokens rather than a third-party OAuth consent flow.
+Replicate's public API currently uses API tokens rather than a third-party OAuth consent flow.
 
-GPTAudioPlugin therefore acts as the OAuth authorization server seen by ChatGPT:
+GPTAudioPlugin acts as the OAuth authorization server seen by ChatGPT:
 
-1. ChatGPT starts OAuth 2.1 Authorization Code + PKCE.
-2. GPTAudioPlugin opens a **Connect Replicate** page.
-3. The page links the user to Replicate's API-token page.
-4. The user pastes their Replicate token into the authorization page, not into chat.
-5. GPTAudioPlugin validates it with `GET https://api.replicate.com/v1/account`.
-6. The Replicate token is encrypted at rest under `.data/`.
-7. GPTAudioPlugin issues ChatGPT an opaque OAuth access/refresh token.
-8. Protected MCP tools resolve the OAuth session back to that user's Replicate credential.
-
-The Replicate token is never returned to the model or widget.
-
-### OAuth endpoints
-
-```text
-/.well-known/oauth-protected-resource
-/.well-known/oauth-authorization-server
-/authorize
-/token
-/mcp
-```
+1. a protected tool triggers ChatGPT's Connect flow;
+2. GPTAudioPlugin opens a **Connect Replicate** authorization page;
+3. the user opens Replicate's API-token page and creates/copies a token;
+4. the token is pasted into the authorization page, never into chat;
+5. GPTAudioPlugin validates it against Replicate;
+6. the token is encrypted locally under `.data/`;
+7. ChatGPT receives opaque OAuth access/refresh tokens.
 
 Protected tools:
 
@@ -65,51 +61,41 @@ Protected tools:
 - `inspect_replicate_model`
 - `generate_music`
 
-`open_audio_studio` remains public so the UI can open before account linking.
+## Native audio attachment
+
+`generate_music` exposes an optional `referenceAudio` file parameter. The skill tells ChatGPT to pass the user's normal conversation attachment into this parameter.
+
+The MCP server downloads the temporary ChatGPT file URL and hands a File object to the Replicate SDK.
+
+The user does not need to:
+
+- open another plugin panel;
+- click another upload button;
+- record inside an iframe;
+- repeat the creative context manually.
 
 ## Replicate model compatibility
 
-Replicate is a general model-hosting platform, so **not every model accepts audio** and input field names are not standardized.
+Not every Replicate-hosted model accepts audio.
 
-GPTAudioPlugin does not assume a fixed schema. For the selected model it fetches the Replicate OpenAPI input schema and detects:
+Before generation, the server inspects the selected model's OpenAPI input schema and detects:
 
 - text prompt field;
-- audio/reference field;
+- reference/audio field;
 - duration field;
 - continuation field;
-- output format field;
-- required inputs that the plugin does not yet know how to provide.
+- output-format field;
+- required inputs not yet supported by the generic adapter.
 
-The UI enables **Upload audio** and **Record** only when the selected model exposes a recognizable audio input.
-
-Examples of possible model shapes:
+Default:
 
 ```text
-text-only:
-  prompt
-
-audio-conditioned:
-  prompt + input_audio
-
-another audio model:
-  text + reference_audio
-
-unsupported for this plugin:
-  prompt + required custom_parameter
+meta/musicgen
 ```
 
-If reference audio is supplied to a model with no audio input, generation fails explicitly instead of silently ignoring the audio.
+MusicGen supports reference audio. If a user selects a text-only model and also attaches audio, generation fails explicitly rather than silently ignoring the file.
 
-The default adapter still contains MusicGen-specific defaults where its schema exposes them, while unknown Replicate models use schema-based generic mapping.
-
-## Requirements
-
-- Windows 10/11
-- Node.js 18+ (Node 22 recommended)
-- ChatGPT desktop/app surface with plugin/MCP Apps support
-- A Replicate account
-
-## Local setup
+## Local development
 
 ```powershell
 git clone git@github.com:Lisuiwen/GPTAudioPlugin.git
@@ -127,13 +113,7 @@ PORT=8787
 PUBLIC_BASE_URL=http://127.0.0.1:8787
 ```
 
-No `REPLICATE_API_TOKEN` is required in `.env`.
-
-Health check:
-
-```text
-http://127.0.0.1:8787/
-```
+No `REPLICATE_API_TOKEN` is stored in `.env`.
 
 MCP endpoint:
 
@@ -148,33 +128,28 @@ http://127.0.0.1:8787/.well-known/oauth-protected-resource
 http://127.0.0.1:8787/.well-known/oauth-authorization-server
 ```
 
-## Local OAuth testing
+## Tools
 
-Run:
+### generate_music
 
-```powershell
-npm run inspect
-```
+Main user-facing tool. Inputs include:
 
-Use the MCP Inspector Auth flow to test OAuth discovery, PKCE, linking, model inspection, and generation.
+- `conversationSummary`
+- `directorPrompt`
+- optional `referenceAudio` from the normal ChatGPT attachment
+- optional `model`
+- `duration`
+- optional `continuation`
 
-For a published ChatGPT plugin, the MCP and OAuth endpoints need a stable public HTTPS origin. Set:
+### inspect_replicate_model
 
-```env
-PUBLIC_BASE_URL=https://your-plugin.example.com
-```
+Schema/capability inspection for alternative Replicate models.
 
-The local `http://127.0.0.1:8787` configuration is for Windows development. Whether ChatGPT Desktop itself accepts the full OAuth connection flow against loopback HTTP depends on the current developer surface; production should use HTTPS.
+### get_replicate_profile
 
-## Reference audio transport
+Returns the connected Replicate identity for account UI.
 
-ChatGPT supplies a temporary download URL for an uploaded or recorded clip.
-
-GPTAudioPlugin downloads the clip server-side and passes it to the Replicate JavaScript client as a file. This is more robust than asking the Replicate worker to fetch ChatGPT's temporary URL directly.
-
-Replicate supports file inputs up to 100 MB through its client upload path.
-
-## Build plugin ZIP
+## Package
 
 ```powershell
 npm run package:plugin
@@ -186,7 +161,7 @@ Output:
 dist/gpt-audio-plugin.zip
 ```
 
-The ZIP contains the portable plugin manifests and skill. The local MCP server is still a separately running process during Windows development.
+The portable package contains the manifests and skill only. There is no embedded audio UI.
 
 ## Project structure
 
@@ -195,10 +170,8 @@ GPTAudioPlugin/
 ├─ plugin.json
 ├─ mcp.json
 ├─ .mcp.json
-├─ .codex-plugin/
-│  └─ plugin.json
+├─ .codex-plugin/plugin.json
 ├─ skills/audio-creator/SKILL.md
-├─ public/audio-widget.html
 ├─ src/
 │  ├─ auth.ts
 │  ├─ replicate.ts
@@ -207,10 +180,6 @@ GPTAudioPlugin/
 └─ README.md
 ```
 
-## Next
+## Separate future plugin
 
-- Validate ChatGPT Desktop's loopback OAuth behavior on Windows.
-- If loopback OAuth is rejected, deploy only the MCP/Auth edge to HTTPS while keeping development local.
-- Add a Replicate model browser filtered to audio/music generation models.
-- Add explicit adapters for popular Replicate music models whose schemas use non-standard fields.
-- Add generation history and durable output storage.
+A dedicated recorder plugin can later provide microphone capture, waveform editing, trimming, and take management. That product should remain separate from this context-first generation plugin.
