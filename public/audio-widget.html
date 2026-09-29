@@ -9,33 +9,14 @@
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color-scheme: light dark;
     }
-    body {
-      margin: 0;
-      padding: 14px;
-      background: transparent;
-    }
-    main {
-      display: grid;
-      gap: 12px;
-    }
-    h2 {
-      margin: 0;
-      font-size: 16px;
-    }
-    .hint {
-      margin: 0;
-      opacity: .7;
-      font-size: 12px;
-    }
-    label {
-      display: grid;
-      gap: 6px;
-      font-size: 12px;
-      font-weight: 600;
-    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 14px; background: transparent; }
+    main { display: grid; gap: 12px; }
+    h2 { margin: 0; font-size: 16px; }
+    .hint { margin: 0; opacity: .7; font-size: 12px; line-height: 1.45; }
+    label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
     textarea,
     input[type="number"] {
-      box-sizing: border-box;
       width: 100%;
       border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
       border-radius: 10px;
@@ -45,15 +26,8 @@
       font: inherit;
       resize: vertical;
     }
-    textarea {
-      min-height: 72px;
-    }
-    .row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
+    textarea { min-height: 82px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     button {
       border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
       border-radius: 10px;
@@ -63,55 +37,34 @@
       cursor: pointer;
       font-weight: 600;
     }
-    button.primary {
-      background: CanvasText;
-      color: Canvas;
-    }
-    button:disabled {
-      cursor: not-allowed;
-      opacity: .5;
-    }
-    .file {
-      font-size: 12px;
-      opacity: .8;
-      overflow-wrap: anywhere;
-    }
-    #result {
-      display: none;
-      gap: 8px;
-      padding-top: 4px;
-    }
-    #result.visible {
-      display: grid;
-    }
-    #error {
-      display: none;
-      font-size: 12px;
-      white-space: pre-wrap;
-    }
-    #error.visible {
-      display: block;
-    }
-    audio {
-      width: 100%;
-    }
+    button.primary { background: CanvasText; color: Canvas; }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    .file { font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+    #result { display: none; gap: 8px; padding-top: 4px; }
+    #result.visible { display: grid; }
+    #error { display: none; font-size: 12px; white-space: pre-wrap; }
+    #error.visible { display: block; }
+    audio { width: 100%; }
   </style>
 </head>
 <body>
   <main>
     <div>
       <h2>GPT Audio Plugin</h2>
-      <p class="hint">Chat context → optional reference audio → Replicate</p>
+      <p class="hint">
+        ChatGPT supplies both the conversation summary and the music-director prompt.
+        This widget only handles review, audio input, and Replicate generation.
+      </p>
     </div>
 
     <label>
-      Conversation context
-      <textarea id="context" placeholder="ChatGPT will pass a summary of the current conversation here."></textarea>
+      Conversation summary
+      <textarea id="context" placeholder="Relevant context from the current ChatGPT conversation."></textarea>
     </label>
 
     <label>
-      Extra direction
-      <textarea id="prompt" placeholder="Optional: tempo, instrumentation, structure, changes..."></textarea>
+      GPT director prompt
+      <textarea id="prompt" placeholder="Production-ready music direction prepared by ChatGPT."></textarea>
     </label>
 
     <div class="row">
@@ -121,6 +74,7 @@
       </label>
       <button id="upload" type="button">Upload audio</button>
       <button id="record" type="button">Record</button>
+      <button id="clear" type="button" disabled>Clear audio</button>
       <input id="fileInput" type="file" accept="audio/*" hidden />
     </div>
 
@@ -152,6 +106,7 @@
     const continuationEl = document.querySelector("#continuation");
     const uploadEl = document.querySelector("#upload");
     const recordEl = document.querySelector("#record");
+    const clearEl = document.querySelector("#clear");
     const fileInputEl = document.querySelector("#fileInput");
     const fileLabelEl = document.querySelector("#fileLabel");
     const generateEl = document.querySelector("#generate");
@@ -165,18 +120,32 @@
     let recordingStream = null;
     let chunks = [];
 
-    const initialInput = openai?.toolInput ?? {};
-    const initialOutput = openai?.toolOutput ?? {};
+    function hydrate(input, output) {
+      contextEl.value =
+        input?.conversationSummary ??
+        output?.conversationSummary ??
+        contextEl.value ??
+        "";
 
-    contextEl.value =
-      initialInput.contextSummary ??
-      initialOutput.contextSummary ??
-      "";
+      promptEl.value =
+        input?.directorPrompt ??
+        output?.directorPrompt ??
+        promptEl.value ??
+        "";
 
-    promptEl.value =
-      initialInput.initialPrompt ??
-      initialOutput.initialPrompt ??
-      "";
+      renderResult(output);
+    }
+
+    hydrate(openai?.toolInput ?? {}, openai?.toolOutput ?? {});
+
+    window.addEventListener(
+      "openai:set_globals",
+      (event) => {
+        const globals = event?.detail?.globals ?? {};
+        hydrate(globals.toolInput ?? {}, globals.toolOutput ?? {});
+      },
+      { passive: true }
+    );
 
     function setError(message) {
       errorEl.textContent = message || "";
@@ -185,6 +154,7 @@
 
     function setReferenceAudio(file) {
       referenceAudio = file;
+      clearEl.disabled = !file;
       fileLabelEl.textContent = file
         ? `Reference: ${file.file_name || file.file_id}`
         : "No reference audio selected.";
@@ -225,6 +195,12 @@
         setReferenceAudio(null);
         setError(error instanceof Error ? error.message : String(error));
       }
+    });
+
+    clearEl.addEventListener("click", () => {
+      setReferenceAudio(null);
+      fileInputEl.value = "";
+      continuationEl.checked = false;
     });
 
     recordEl.addEventListener("click", async () => {
@@ -297,15 +273,20 @@
       }
     }
 
-    renderResult(initialOutput);
-
     generateEl.addEventListener("click", async () => {
       setError("");
       resultEl.classList.remove("visible");
 
-      const contextSummary = contextEl.value.trim();
-      if (!contextSummary) {
-        setError("Conversation context is required.");
+      const conversationSummary = contextEl.value.trim();
+      const directorPrompt = promptEl.value.trim();
+
+      if (!conversationSummary) {
+        setError("Conversation summary is required.");
+        return;
+      }
+
+      if (!directorPrompt) {
+        setError("GPT director prompt is required.");
         return;
       }
 
@@ -319,8 +300,8 @@
 
       try {
         const response = await openai.callTool("generate_music", {
-          contextSummary,
-          prompt: promptEl.value.trim() || undefined,
+          conversationSummary,
+          directorPrompt,
           duration: Math.max(
             1,
             Math.min(30, Number(durationEl.value || 8))
@@ -331,7 +312,17 @@
           ),
         });
 
-        renderResult(response?.structuredContent ?? response);
+        const data = response?.structuredContent ?? response;
+        renderResult(data);
+
+        if (response?.isError) {
+          throw new Error(
+            response?.content
+              ?.filter((item) => item?.type === "text")
+              ?.map((item) => item.text)
+              ?.join("\n") || "Generation failed."
+          );
+        }
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error));
       } finally {
