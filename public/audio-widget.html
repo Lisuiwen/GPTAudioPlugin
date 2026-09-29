@@ -13,9 +13,10 @@
     body { margin: 0; padding: 14px; background: transparent; }
     main { display: grid; gap: 12px; }
     h2 { margin: 0; font-size: 16px; }
-    .hint { margin: 0; opacity: .7; font-size: 12px; line-height: 1.45; }
+    .hint { margin: 0; opacity: .72; font-size: 12px; line-height: 1.45; }
     label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
     textarea,
+    input[type="text"],
     input[type="number"] {
       width: 100%;
       border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
@@ -28,6 +29,7 @@
     }
     textarea { min-height: 82px; }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .model-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
     button {
       border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
       border-radius: 10px;
@@ -38,8 +40,11 @@
       font-weight: 600;
     }
     button.primary { background: CanvasText; color: Canvas; }
-    button:disabled { cursor: not-allowed; opacity: .5; }
-    .file { font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    .status,
+    .file { font-size: 12px; opacity: .8; overflow-wrap: anywhere; line-height: 1.45; }
+    .status.ok { opacity: 1; }
+    .status.warn { opacity: 1; }
     #result { display: none; gap: 8px; padding-top: 4px; }
     #result.visible { display: grid; }
     #error { display: none; font-size: 12px; white-space: pre-wrap; }
@@ -52,8 +57,8 @@
     <div>
       <h2>GPT Audio Plugin</h2>
       <p class="hint">
-        ChatGPT supplies both the conversation summary and the music-director prompt.
-        This widget only handles review, audio input, and Replicate generation.
+        ChatGPT supplies the conversation summary and music-director prompt.
+        Replicate is connected separately and billed to the user's own account.
       </p>
     </div>
 
@@ -67,13 +72,25 @@
       <textarea id="prompt" placeholder="Production-ready music direction prepared by ChatGPT."></textarea>
     </label>
 
+    <div class="model-row">
+      <label>
+        Replicate model
+        <input id="modelInput" type="text" placeholder="owner/name or owner/name:version" />
+      </label>
+      <button id="inspect" type="button">Connect / Check model</button>
+    </div>
+
+    <div id="capability" class="status">
+      Connect Replicate and check the model before adding reference audio.
+    </div>
+
     <div class="row">
       <label style="width: 110px;">
         Duration (sec)
         <input id="duration" type="number" min="1" max="30" value="8" />
       </label>
-      <button id="upload" type="button">Upload audio</button>
-      <button id="record" type="button">Record</button>
+      <button id="upload" type="button" disabled>Upload audio</button>
+      <button id="record" type="button" disabled>Record</button>
       <button id="clear" type="button" disabled>Clear audio</button>
       <input id="fileInput" type="file" accept="audio/*" hidden />
     </div>
@@ -82,7 +99,7 @@
 
     <div class="row">
       <label style="display:flex;align-items:center;gap:6px;font-weight:500;">
-        <input id="continuation" type="checkbox" />
+        <input id="continuation" type="checkbox" disabled />
         Continue reference audio
       </label>
     </div>
@@ -93,7 +110,7 @@
 
     <section id="result">
       <audio id="player" controls></audio>
-      <div id="model" class="file"></div>
+      <div id="resultModel" class="file"></div>
     </section>
   </main>
 
@@ -102,6 +119,9 @@
 
     const contextEl = document.querySelector("#context");
     const promptEl = document.querySelector("#prompt");
+    const modelInputEl = document.querySelector("#modelInput");
+    const inspectEl = document.querySelector("#inspect");
+    const capabilityEl = document.querySelector("#capability");
     const durationEl = document.querySelector("#duration");
     const continuationEl = document.querySelector("#continuation");
     const uploadEl = document.querySelector("#upload");
@@ -113,12 +133,14 @@
     const errorEl = document.querySelector("#error");
     const resultEl = document.querySelector("#result");
     const playerEl = document.querySelector("#player");
-    const modelEl = document.querySelector("#model");
+    const resultModelEl = document.querySelector("#resultModel");
 
     let referenceAudio = null;
     let mediaRecorder = null;
     let recordingStream = null;
     let chunks = [];
+    let checkedModel = null;
+    let capabilities = null;
 
     function hydrate(input, output) {
       contextEl.value =
@@ -132,6 +154,11 @@
         output?.directorPrompt ??
         promptEl.value ??
         "";
+
+      const incomingModel = input?.model ?? output?.model;
+      if (incomingModel && !modelInputEl.value) {
+        modelInputEl.value = incomingModel;
+      }
 
       renderResult(output);
     }
@@ -159,6 +186,87 @@
         ? `Reference: ${file.file_name || file.file_id}`
         : "No reference audio selected.";
     }
+
+    function setCapabilities(data) {
+      capabilities = data;
+      checkedModel = data?.model || null;
+
+      const supportsAudio = Boolean(data?.supportsAudioInput);
+      uploadEl.disabled = !supportsAudio;
+      recordEl.disabled = !supportsAudio;
+      continuationEl.disabled = !supportsAudio;
+
+      if (!supportsAudio) {
+        setReferenceAudio(null);
+        continuationEl.checked = false;
+      }
+
+      if (!data) {
+        capabilityEl.textContent =
+          "Connect Replicate and check the model before adding reference audio.";
+        capabilityEl.className = "status";
+        return;
+      }
+
+      if (data.unsupportedRequiredFields?.length) {
+        capabilityEl.textContent =
+          `Model needs additional required fields not mapped yet: ${data.unsupportedRequiredFields.join(", ")}.`;
+        capabilityEl.className = "status warn";
+        return;
+      }
+
+      if (supportsAudio) {
+        capabilityEl.textContent =
+          `✓ Reference audio supported via "${data.audioField}".`;
+        capabilityEl.className = "status ok";
+      } else {
+        capabilityEl.textContent =
+          "This model is text-only from GPTAudioPlugin's perspective. Upload and recording are disabled.";
+        capabilityEl.className = "status warn";
+      }
+    }
+
+    async function callTool(name, args) {
+      if (!openai?.callTool) {
+        throw new Error("This host does not expose the ChatGPT tool-call bridge.");
+      }
+      return openai.callTool(name, args);
+    }
+
+    inspectEl.addEventListener("click", async () => {
+      setError("");
+      inspectEl.disabled = true;
+      inspectEl.textContent = "Checking…";
+
+      try {
+        const model = modelInputEl.value.trim();
+        if (!model) throw new Error("Replicate model is required.");
+
+        const response = await callTool("inspect_replicate_model", { model });
+        if (response?.isError) {
+          throw new Error(
+            response?.content
+              ?.filter((item) => item?.type === "text")
+              ?.map((item) => item.text)
+              ?.join("\n") || "Model inspection failed."
+          );
+        }
+
+        setCapabilities(response?.structuredContent ?? response);
+      } catch (error) {
+        setCapabilities(null);
+        setError(error instanceof Error ? error.message : String(error));
+      } finally {
+        inspectEl.disabled = false;
+        inspectEl.textContent = "Connect / Check model";
+      }
+    });
+
+    modelInputEl.addEventListener("input", () => {
+      if (modelInputEl.value.trim() !== checkedModel) {
+        setCapabilities(null);
+      }
+    });
 
     async function uploadToChatGPT(file) {
       if (!openai?.uploadFile || !openai?.getFileDownloadUrl) {
@@ -266,7 +374,7 @@
 
       if (data.audioUrl) {
         playerEl.src = data.audioUrl;
-        modelEl.textContent = data.model
+        resultModelEl.textContent = data.model
           ? `Model: ${data.model}`
           : "";
         resultEl.classList.add("visible");
@@ -279,6 +387,7 @@
 
       const conversationSummary = contextEl.value.trim();
       const directorPrompt = promptEl.value.trim();
+      const model = modelInputEl.value.trim();
 
       if (!conversationSummary) {
         setError("Conversation summary is required.");
@@ -290,8 +399,18 @@
         return;
       }
 
-      if (!openai?.callTool) {
-        setError("This host does not expose the ChatGPT tool-call bridge.");
+      if (!model) {
+        setError("Replicate model is required.");
+        return;
+      }
+
+      if (referenceAudio && checkedModel !== model) {
+        setError("Check this model again before sending reference audio.");
+        return;
+      }
+
+      if (referenceAudio && !capabilities?.supportsAudioInput) {
+        setError("The selected model does not support reference audio.");
         return;
       }
 
@@ -299,7 +418,8 @@
       generateEl.textContent = "Generating…";
 
       try {
-        const response = await openai.callTool("generate_music", {
+        const response = await callTool("generate_music", {
+          model,
           conversationSummary,
           directorPrompt,
           duration: Math.max(

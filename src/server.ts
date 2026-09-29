@@ -14,7 +14,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-import { generateMusic } from "./replicate.js";
+import {
+  authenticateRequest,
+  getPublicBaseUrl,
+  handleAuthHttp,
+  oauthChallenge,
+  type AuthSession,
+} from "./auth.js";
+import {
+  DEFAULT_MODEL,
+  generateMusic,
+  inspectReplicateModel,
+} from "./replicate.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const widgetHtml = readFileSync(
@@ -24,6 +35,9 @@ const widgetHtml = readFileSync(
 
 const WIDGET_URI = "ui://widget/gpt-audio-studio.html";
 const MCP_PATH = "/mcp";
+const OAUTH_SCOPES = ["replicate.read", "replicate.run"];
+const OAUTH_SECURITY = [{ type: "oauth2" as const, scopes: OAUTH_SCOPES }];
+const NOAUTH_SECURITY = [{ type: "noauth" as const }];
 
 const OpenAIFileSchema = z.object({
   download_url: z.string().url(),
@@ -31,6 +45,20 @@ const OpenAIFileSchema = z.object({
   mime_type: z.string().optional(),
   file_name: z.string().optional(),
 });
+
+const capabilitiesOutputSchema = {
+  model: z.string(),
+  supportsTextPrompt: z.boolean(),
+  promptField: z.string().optional(),
+  supportsAudioInput: z.boolean(),
+  audioField: z.string().optional(),
+  durationField: z.string().optional(),
+  continuationField: z.string().optional(),
+  outputFormatField: z.string().optional(),
+  inputFields: z.array(z.string()),
+  requiredFields: z.array(z.string()),
+  unsupportedRequiredFields: z.array(z.string()),
+};
 
 const studioInputSchema = {
   conversationSummary: z
@@ -56,6 +84,12 @@ const studioOutputSchema = {
 };
 
 const generateInputSchema = {
+  model: z
+    .string()
+    .optional()
+    .describe(
+      'Replicate model as "owner/name" or "owner/name:version". Defaults to the plugin model.'
+    ),
   conversationSummary: z.string().min(1),
   directorPrompt: z.string().min(1),
   duration: z.number().int().min(1).max(30).default(8),
@@ -63,15 +97,33 @@ const generateInputSchema = {
   continuation: z.boolean().default(false),
 };
 
-function createAudioServer(): McpServer {
+function authRequired(baseUrl: string) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: "Connect your Replicate account to continue.",
+      },
+    ],
+    _meta: {
+      "mcp/www_authenticate": [oauthChallenge(baseUrl)],
+    },
+    isError: true,
+  };
+}
+
+function createAudioServer(
+  authSession: AuthSession | undefined,
+  baseUrl: string
+): McpServer {
   const server = new McpServer(
     {
       name: "gpt-audio-plugin-server",
-      version: "0.1.0",
+      version: "0.2.0",
     },
     {
       instructions:
-        "Before open_audio_studio, reuse the current chat as the reasoning layer: summarize only relevant music context into conversationSummary and draft a production-ready directorPrompt. The plugin must not call a separate text model. The user can edit both fields before the billable Replicate generation.",
+        "Reuse the current ChatGPT conversation as the text reasoning layer. Before open_audio_studio, summarize relevant music context into conversationSummary and draft a production-ready directorPrompt. Protected Replicate tools require the user to connect their own Replicate account through OAuth.",
     }
   );
 
@@ -101,7 +153,7 @@ function createAudioServer(): McpServer {
               availableDisplayModes: ["inline", "fullscreen"],
             },
             "openai/widgetDescription":
-              "Review the current ChatGPT music context and director prompt, optionally add reference audio, and generate through Replicate.",
+              "Review ChatGPT's music direction, connect a Replicate account, inspect model capabilities, optionally add reference audio, and generate music.",
           },
         },
       ],
@@ -114,7 +166,7 @@ function createAudioServer(): McpServer {
     {
       title: "Open audio studio",
       description:
-        "Open the music creation UI. Pass both a concise conversationSummary and a production-ready directorPrompt created by the current ChatGPT model, so the plugin can reuse the chat without a separate text-model API.",
+        "Open the music creation UI using the current ChatGPT conversation summary and ChatGPT-authored music director prompt.",
       inputSchema: studioInputSchema,
       outputSchema: studioOutputSchema,
       annotations: {
@@ -122,25 +174,131 @@ function createAudioServer(): McpServer {
         destructiveHint: false,
         openWorldHint: false,
       },
+      securitySchemes: NOAUTH_SECURITY,
       _meta: {
+        securitySchemes: NOAUTH_SECURITY,
         ui: { resourceUri: WIDGET_URI },
         "openai/widgetAccessible": true,
       },
     },
-    async (args) => {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Audio studio opened with the current conversation context and ChatGPT director prompt.",
-          },
-        ],
-        structuredContent: {
-          status: "ready",
-          conversationSummary: args.conversationSummary ?? "",
-          directorPrompt: args.directorPrompt ?? "",
+    async (args) => ({
+      content: [
+        {
+          type: "text",
+          text: "Audio studio opened. Connect Replicate before inspecting a model or generating music.",
         },
+      ],
+      structuredContent: {
+        status: "ready",
+        conversationSummary: args.conversationSummary ?? "",
+        directorPrompt: args.directorPrompt ?? "",
+        model: DEFAULT_MODEL,
+      },
+    })
+  );
+
+  registerAppTool(
+    server,
+    "get_replicate_profile",
+    {
+      title: "Replicate profile",
+      description:
+        "Return the Replicate account connected to GPT Audio Plugin.",
+      inputSchema: {},
+      outputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        nickname: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      securitySchemes: OAUTH_SECURITY,
+      _meta: {
+        securitySchemes: OAUTH_SECURITY,
+        "openai/profile": true,
+      },
+    },
+    async () => {
+      if (!authSession) return authRequired(baseUrl);
+
+      const profile = {
+        id: authSession.profileId,
+        name: authSession.name || authSession.username,
+        nickname: `${authSession.username} — Replicate`,
       };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(profile) }],
+        structuredContent: profile,
+      };
+    }
+  );
+
+  registerAppTool(
+    server,
+    "inspect_replicate_model",
+    {
+      title: "Check Replicate model",
+      description:
+        "Inspect a Replicate model's input schema before generation. Use this to determine whether the selected model supports reference audio and which inputs the plugin can map.",
+      inputSchema: {
+        model: z.string().default(DEFAULT_MODEL),
+      },
+      outputSchema: capabilitiesOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+      securitySchemes: OAUTH_SECURITY,
+      _meta: {
+        securitySchemes: OAUTH_SECURITY,
+        ui: { resourceUri: WIDGET_URI },
+        "openai/widgetAccessible": true,
+        "openai/toolInvocation/invoking": "Checking Replicate model…",
+        "openai/toolInvocation/invoked": "Model capabilities loaded.",
+      },
+    },
+    async (args) => {
+      if (!authSession) return authRequired(baseUrl);
+
+      try {
+        const capabilities = await inspectReplicateModel(
+          authSession.replicateToken,
+          args.model || DEFAULT_MODEL
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: capabilities.supportsAudioInput
+                ? `Model ${capabilities.model} supports reference audio via ${capabilities.audioField}.`
+                : `Model ${capabilities.model} does not expose a recognizable audio input.`,
+            },
+          ],
+          structuredContent: capabilities,
+        };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to inspect model.";
+
+        return {
+          content: [{ type: "text", text: message }],
+          structuredContent: {
+            model: args.model || DEFAULT_MODEL,
+            supportsTextPrompt: false,
+            supportsAudioInput: false,
+            inputFields: [],
+            requiredFields: [],
+            unsupportedRequiredFields: [],
+          },
+          isError: true,
+        };
+      }
     }
   );
 
@@ -150,7 +308,7 @@ function createAudioServer(): McpServer {
     {
       title: "Generate music with Replicate",
       description:
-        "Create a billable Replicate music prediction using conversationSummary, the ChatGPT-authored directorPrompt, and optional uploaded or recorded referenceAudio.",
+        "Create a billable Replicate prediction using the connected user's Replicate account. The model is inspected first; reference audio is rejected when the selected model does not support it.",
       inputSchema: generateInputSchema,
       outputSchema: studioOutputSchema,
       annotations: {
@@ -158,7 +316,9 @@ function createAudioServer(): McpServer {
         destructiveHint: false,
         openWorldHint: true,
       },
+      securitySchemes: OAUTH_SECURITY,
       _meta: {
+        securitySchemes: OAUTH_SECURITY,
         ui: { resourceUri: WIDGET_URI },
         "openai/widgetAccessible": true,
         "openai/fileParams": ["referenceAudio"],
@@ -167,12 +327,17 @@ function createAudioServer(): McpServer {
       },
     },
     async (args) => {
+      if (!authSession) return authRequired(baseUrl);
+
       try {
-        const result = await generateMusic({
+        const result = await generateMusic(authSession.replicateToken, {
+          model: args.model,
           conversationSummary: args.conversationSummary,
           directorPrompt: args.directorPrompt,
           duration: args.duration ?? 8,
           referenceAudioUrl: args.referenceAudio?.download_url,
+          referenceAudioName: args.referenceAudio?.file_name,
+          referenceAudioMimeType: args.referenceAudio?.mime_type,
           continuation: args.continuation ?? false,
         });
 
@@ -197,11 +362,17 @@ function createAudioServer(): McpServer {
           error instanceof Error ? error.message : "Unknown generation error.";
 
         return {
-          content: [{ type: "text", text: `Music generation failed: ${message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Music generation failed: ${message}`,
+            },
+          ],
           structuredContent: {
             status: "failed",
             conversationSummary: args.conversationSummary,
             directorPrompt: args.directorPrompt,
+            model: args.model || DEFAULT_MODEL,
             error: message,
           },
           isError: true,
@@ -214,6 +385,7 @@ function createAudioServer(): McpServer {
 }
 
 const port = Number(process.env.PORT ?? 8787);
+const baseUrl = getPublicBaseUrl(port);
 
 const httpServer = createServer(async (req, res) => {
   if (!req.url) {
@@ -221,33 +393,41 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+  const requestUrl = new URL(
+    req.url,
+    `http://${req.headers.host ?? "localhost"}`
+  );
 
-  if (req.method === "OPTIONS" && url.pathname === MCP_PATH) {
+  if (await handleAuthHttp(req, res, requestUrl, baseUrl)) {
+    return;
+  }
+
+  if (req.method === "OPTIONS" && requestUrl.pathname === MCP_PATH) {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "content-type, mcp-session-id",
+      "Access-Control-Allow-Headers":
+        "authorization, content-type, mcp-session-id",
       "Access-Control-Expose-Headers": "Mcp-Session-Id",
     });
     res.end();
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/") {
+  if (req.method === "GET" && requestUrl.pathname === "/") {
     res
       .writeHead(200, { "content-type": "application/json" })
       .end(
         JSON.stringify({
           name: "GPTAudioPlugin",
           status: "ok",
+          version: "0.2.0",
           mcp: MCP_PATH,
-          replicateConfigured: Boolean(
-            process.env.REPLICATE_API_TOKEN?.trim()
-          ),
-          model:
-            process.env.REPLICATE_MODEL?.trim() ||
-            "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
+          oauth: {
+            resourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
+            authorizationServer: baseUrl,
+          },
+          model: DEFAULT_MODEL,
         })
       );
     return;
@@ -255,14 +435,15 @@ const httpServer = createServer(async (req, res) => {
 
   const allowedMethods = new Set(["POST", "GET", "DELETE"]);
   if (
-    url.pathname === MCP_PATH &&
+    requestUrl.pathname === MCP_PATH &&
     req.method &&
     allowedMethods.has(req.method)
   ) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
-    const server = createAudioServer();
+    const authSession = authenticateRequest(req);
+    const server = createAudioServer(authSession, baseUrl);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -292,4 +473,5 @@ httpServer.listen(port, "127.0.0.1", () => {
   console.log(
     `GPTAudioPlugin MCP server listening on http://127.0.0.1:${port}${MCP_PATH}`
   );
+  console.log(`OAuth issuer: ${baseUrl}`);
 });

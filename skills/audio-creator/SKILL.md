@@ -1,6 +1,6 @@
 ---
 name: audio-creator
-description: Open GPT Audio Plugin with a concise current-chat summary and a music-director prompt so the user can create music from conversation context and optional reference audio through Replicate.
+description: Open GPT Audio Plugin with a concise current-chat summary and a music-director prompt so the user can create music through their connected Replicate account.
 ---
 
 # Audio Creator
@@ -20,7 +20,9 @@ Use this workflow when the user wants to create, iterate on, or continue music w
    - instruments and sound-design ideas
    - structure, duration, looping, or other constraints
 4. Call `open_audio_studio` with both values.
-5. Let the user inspect/edit them, upload a clip, record a clip, and trigger generation from the UI.
-6. The plugin uses the user's configured Replicate account. Do not request or expose a Replicate API token in chat.
-7. `generate_music` creates a billable Replicate prediction; keep the user's edited values when calling it.
-8. If the user explicitly asks to generate without opening the studio and all required generation fields are available, `generate_music` may be called directly.
+5. Replicate account access is user-owned. Protected tools trigger the plugin's OAuth connection flow; never request a Replicate token in chat.
+6. Before accepting reference audio for a selected model, use `inspect_replicate_model`. Replicate models have different input schemas and not all of them accept audio.
+7. If the selected model does not expose an audio input, keep the workflow text-only and do not imply that uploaded audio affects generation.
+8. Let the user inspect/edit the text fields, select/check a model, optionally upload or record audio when supported, and trigger generation from the UI.
+9. `generate_music` creates a billable Replicate prediction using the connected user's Replicate account.
+10. If the user explicitly asks to generate without opening the studio and all required fields are available, `generate_music` may be called directly.
