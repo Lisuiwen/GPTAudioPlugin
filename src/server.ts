@@ -181,7 +181,7 @@ function createAudioServer(
         "openai/widgetAccessible": true,
       },
     } as any,
-    async (args) => ({
+    async (args: any) => ({
       content: [
         {
           type: "text",
@@ -262,7 +262,7 @@ function createAudioServer(
         "openai/toolInvocation/invoked": "Model capabilities loaded.",
       },
     } as any,
-    async (args) => {
+    async (args: any) => {
       if (!authSession) return authRequired(baseUrl);
 
       try {
@@ -326,7 +326,7 @@ function createAudioServer(
         "openai/toolInvocation/invoked": "Music generation finished.",
       },
     } as any,
-    async (args) => {
+    async (args: any) => {
       if (!authSession) return authRequired(baseUrl);
 
       try {
