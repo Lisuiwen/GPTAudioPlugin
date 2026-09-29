@@ -1,28 +1,21 @@
 ---
 name: audio-creator
-description: Open GPT Audio Plugin with a concise current-chat summary and a music-director prompt so the user can create music through their connected Replicate account.
+description: Generate music through Replicate using the current ChatGPT conversation and an optional audio file attached directly to the ChatGPT message.
 ---
 
 # Audio Creator
 
-Use this workflow when the user wants to create, iterate on, or continue music with GPT Audio Plugin.
+Use this workflow when the user wants to create, iterate on, continue, or transform music through GPTAudioPlugin.
 
-1. Reuse the current ChatGPT conversation as the text reasoning layer. Do not call or ask the plugin to call a separate text-model API.
-2. Before opening the studio, produce two distinct values:
-   - `conversationSummary`: concise factual/creative context already established in the chat.
-   - `directorPrompt`: a production-ready music-generation prompt drafted by the current ChatGPT model.
-3. Preserve concrete creative constraints when present:
-   - scene or story
-   - intended use (game BGM, song, ambience, etc.)
-   - mood and energy
-   - genre or stylistic references
-   - tempo or pacing
-   - instruments and sound-design ideas
-   - structure, duration, looping, or other constraints
-4. Call `open_audio_studio` with both values.
-5. Replicate account access is user-owned. Protected tools trigger the plugin's OAuth connection flow; never request a Replicate token in chat.
-6. Before accepting reference audio for a selected model, use `inspect_replicate_model`. Replicate models have different input schemas and not all of them accept audio.
-7. If the selected model does not expose an audio input, keep the workflow text-only and do not imply that uploaded audio affects generation.
-8. Let the user inspect/edit the text fields, select/check a model, optionally upload or record audio when supported, and trigger generation from the UI.
-9. `generate_music` creates a billable Replicate prediction using the connected user's Replicate account.
-10. If the user explicitly asks to generate without opening the studio and all required fields are available, `generate_music` may be called directly.
+1. GPTAudioPlugin has no custom UI. Keep the interaction in the normal ChatGPT conversation.
+2. Reuse the current ChatGPT conversation as the text reasoning layer. Do not call or ask the plugin to call a separate text-model API.
+3. Build two values immediately before generation:
+   - `conversationSummary`: concise creative context already established in the current chat.
+   - `directorPrompt`: a production-ready music-generation prompt based on that context and the user's latest instruction.
+4. If the user attached an audio file using ChatGPT's normal attachment control, treat that attachment as `referenceAudio`. Do not ask the user to upload it again into another panel.
+5. Preserve concrete constraints when present: scene/story, intended use, mood, energy, genre references, tempo, instruments, sound design, structure, duration, looping, and vocal requirements.
+6. Replicate account access is user-owned. Protected tools trigger the plugin's Connect flow; never request or expose a Replicate token in chat.
+7. The default Replicate model is MusicGen and supports reference audio. For a non-default model, call `inspect_replicate_model` when needed to determine whether it accepts audio.
+8. Never imply an attachment influenced generation when the selected model does not accept audio. `generate_music` will also enforce this server-side.
+9. Call `generate_music` directly with the two text fields and the native ChatGPT attachment when present.
+10. `generate_music` creates a billable Replicate prediction using the connected user's Replicate account.
