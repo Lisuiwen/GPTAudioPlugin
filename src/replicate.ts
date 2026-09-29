@@ -4,8 +4,8 @@ const DEFAULT_MODEL =
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
 export type GenerateMusicInput = {
-  contextSummary: string;
-  prompt?: string;
+  conversationSummary: string;
+  directorPrompt: string;
   duration: number;
   referenceAudioUrl?: string;
   continuation?: boolean;
@@ -31,18 +31,15 @@ function getModel(): string {
   return process.env.REPLICATE_MODEL?.trim() || DEFAULT_MODEL;
 }
 
-function composePrompt(contextSummary: string, prompt?: string): string {
-  const context = contextSummary.trim();
-  const extra = prompt?.trim();
-
-  if (!extra) return context;
-
+function composePrompt(
+  conversationSummary: string,
+  directorPrompt: string
+): string {
   return [
-    "Creative context from the current ChatGPT conversation:",
-    context,
+    directorPrompt.trim(),
     "",
-    "Additional music direction from the user:",
-    extra,
+    "Creative context from the current ChatGPT conversation:",
+    conversationSummary.trim(),
   ].join("\n");
 }
 
@@ -87,7 +84,10 @@ export async function generateMusic(
   request: GenerateMusicInput
 ): Promise<GenerateMusicResult> {
   const model = getModel();
-  const finalPrompt = composePrompt(request.contextSummary, request.prompt);
+  const finalPrompt = composePrompt(
+    request.conversationSummary,
+    request.directorPrompt
+  );
 
   const input: Record<string, unknown> = {
     prompt: finalPrompt,

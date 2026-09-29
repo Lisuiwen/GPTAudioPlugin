@@ -33,21 +33,22 @@ const OpenAIFileSchema = z.object({
 });
 
 const studioInputSchema = {
-  contextSummary: z
+  conversationSummary: z
     .string()
     .describe(
       "A concise summary of the current ChatGPT conversation relevant to the music the user wants to create."
     ),
-  initialPrompt: z
+  directorPrompt: z
     .string()
-    .optional()
-    .describe("Optional extra music direction already stated by the user."),
+    .describe(
+      "A production-ready music direction drafted by the current ChatGPT model from the conversation. Do not call a separate text-model API."
+    ),
 };
 
 const studioOutputSchema = {
   status: z.string(),
-  contextSummary: z.string(),
-  initialPrompt: z.string().optional(),
+  conversationSummary: z.string(),
+  directorPrompt: z.string().optional(),
   audioUrl: z.string().optional(),
   model: z.string().optional(),
   prompt: z.string().optional(),
@@ -55,18 +56,24 @@ const studioOutputSchema = {
 };
 
 const generateInputSchema = {
-  contextSummary: z.string().min(1),
-  prompt: z.string().optional(),
+  conversationSummary: z.string().min(1),
+  directorPrompt: z.string().min(1),
   duration: z.number().int().min(1).max(30).default(8),
   referenceAudio: OpenAIFileSchema.optional(),
   continuation: z.boolean().default(false),
 };
 
 function createAudioServer(): McpServer {
-  const server = new McpServer({
-    name: "gpt-audio-plugin-server",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    {
+      name: "gpt-audio-plugin-server",
+      version: "0.1.0",
+    },
+    {
+      instructions:
+        "Before open_audio_studio, reuse the current chat as the reasoning layer: summarize only relevant music context into conversationSummary and draft a production-ready directorPrompt. The plugin must not call a separate text model. The user can edit both fields before the billable Replicate generation.",
+    }
+  );
 
   registerAppResource(
     server,
@@ -80,8 +87,21 @@ function createAudioServer(): McpServer {
           mimeType: RESOURCE_MIME_TYPE,
           text: widgetHtml,
           _meta: {
+            ui: {
+              prefersBorder: true,
+              csp: {
+                connectDomains: [],
+                resourceDomains: [
+                  "https://replicate.delivery",
+                  "https://*.replicate.delivery",
+                ],
+              },
+            },
+            "openai/ui": {
+              availableDisplayModes: ["inline", "fullscreen"],
+            },
             "openai/widgetDescription":
-              "Create music from the current ChatGPT context and optional reference audio.",
+              "Review the current ChatGPT music context and director prompt, optionally add reference audio, and generate through Replicate.",
           },
         },
       ],
@@ -94,9 +114,14 @@ function createAudioServer(): McpServer {
     {
       title: "Open audio studio",
       description:
-        "Open the music creation UI. Pass a concise summary of the current conversation as contextSummary so the user can reuse the chat as creative direction without a separate text-model API.",
+        "Open the music creation UI. Pass both a concise conversationSummary and a production-ready directorPrompt created by the current ChatGPT model, so the plugin can reuse the chat without a separate text-model API.",
       inputSchema: studioInputSchema,
       outputSchema: studioOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
       _meta: {
         ui: { resourceUri: WIDGET_URI },
         "openai/widgetAccessible": true,
@@ -107,13 +132,13 @@ function createAudioServer(): McpServer {
         content: [
           {
             type: "text",
-            text: "Audio studio opened with the current conversation context.",
+            text: "Audio studio opened with the current conversation context and ChatGPT director prompt.",
           },
         ],
         structuredContent: {
           status: "ready",
-          contextSummary: args.contextSummary ?? "",
-          initialPrompt: args.initialPrompt,
+          conversationSummary: args.conversationSummary ?? "",
+          directorPrompt: args.directorPrompt ?? "",
         },
       };
     }
@@ -125,7 +150,7 @@ function createAudioServer(): McpServer {
     {
       title: "Generate music with Replicate",
       description:
-        "Generate music using the configured Replicate account. The creative direction comes from contextSummary plus optional user prompt. referenceAudio can be an uploaded or recorded clip.",
+        "Create a billable Replicate music prediction using conversationSummary, the ChatGPT-authored directorPrompt, and optional uploaded or recorded referenceAudio.",
       inputSchema: generateInputSchema,
       outputSchema: studioOutputSchema,
       annotations: {
@@ -137,13 +162,15 @@ function createAudioServer(): McpServer {
         ui: { resourceUri: WIDGET_URI },
         "openai/widgetAccessible": true,
         "openai/fileParams": ["referenceAudio"],
+        "openai/toolInvocation/invoking": "Generating music with Replicate…",
+        "openai/toolInvocation/invoked": "Music generation finished.",
       },
     },
     async (args) => {
       try {
         const result = await generateMusic({
-          contextSummary: args.contextSummary,
-          prompt: args.prompt,
+          conversationSummary: args.conversationSummary,
+          directorPrompt: args.directorPrompt,
           duration: args.duration ?? 8,
           referenceAudioUrl: args.referenceAudio?.download_url,
           continuation: args.continuation ?? false,
@@ -158,8 +185,8 @@ function createAudioServer(): McpServer {
           ],
           structuredContent: {
             status: "succeeded",
-            contextSummary: args.contextSummary,
-            initialPrompt: args.prompt,
+            conversationSummary: args.conversationSummary,
+            directorPrompt: args.directorPrompt,
             audioUrl: result.audioUrl,
             model: result.model,
             prompt: result.prompt,
@@ -173,8 +200,8 @@ function createAudioServer(): McpServer {
           content: [{ type: "text", text: `Music generation failed: ${message}` }],
           structuredContent: {
             status: "failed",
-            contextSummary: args.contextSummary,
-            initialPrompt: args.prompt,
+            conversationSummary: args.conversationSummary,
+            directorPrompt: args.directorPrompt,
             error: message,
           },
           isError: true,
@@ -215,6 +242,12 @@ const httpServer = createServer(async (req, res) => {
           name: "GPTAudioPlugin",
           status: "ok",
           mcp: MCP_PATH,
+          replicateConfigured: Boolean(
+            process.env.REPLICATE_API_TOKEN?.trim()
+          ),
+          model:
+            process.env.REPLICATE_MODEL?.trim() ||
+            "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
         })
       );
     return;
