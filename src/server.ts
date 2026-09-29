@@ -180,7 +180,7 @@ function createAudioServer(
         ui: { resourceUri: WIDGET_URI },
         "openai/widgetAccessible": true,
       },
-    },
+    } as any,
     async (args) => ({
       content: [
         {
@@ -220,7 +220,7 @@ function createAudioServer(
         securitySchemes: OAUTH_SECURITY,
         "openai/profile": true,
       },
-    },
+    } as any,
     async () => {
       if (!authSession) return authRequired(baseUrl);
 
@@ -261,7 +261,7 @@ function createAudioServer(
         "openai/toolInvocation/invoking": "Checking Replicate model…",
         "openai/toolInvocation/invoked": "Model capabilities loaded.",
       },
-    },
+    } as any,
     async (args) => {
       if (!authSession) return authRequired(baseUrl);
 
@@ -325,7 +325,7 @@ function createAudioServer(
         "openai/toolInvocation/invoking": "Generating music with Replicate…",
         "openai/toolInvocation/invoked": "Music generation finished.",
       },
-    },
+    } as any,
     async (args) => {
       if (!authSession) return authRequired(baseUrl);
 
