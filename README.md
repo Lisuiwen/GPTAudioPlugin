@@ -1,12 +1,20 @@
-# GPTAudioPlugin
+# GPTAudioPlugin / GPTAudioMCP
 
-A UI-less ChatGPT music-generation plugin.
+A small, UI-less ChatGPT plugin plus a self-owned music-generation MCP.
 
-The main plugin deliberately does **not** provide its own recording/upload panel. Users stay in the normal ChatGPT conversation, attach an audio recording with ChatGPT's native attachment control, and ask ChatGPT to generate or continue music from the conversation plus that attachment.
+The design deliberately keeps two concerns separate:
 
-A microphone/recording UI can be developed later as a separate plugin.
+```text
+ChatGPT plugin
+  = conversation context + native attachment workflow
 
-## v0.3 flow
+GPTAudioMCP
+  = stable music tool contract + provider adapters
+```
+
+Replicate is the only provider enabled in v0.4, but the MCP no longer hard-wires provider logic into the tool layer.
+
+## User flow
 
 ```text
 normal ChatGPT conversation
@@ -17,83 +25,107 @@ native ChatGPT audio attachment (optional)
         └─ ChatGPT creates directorPrompt
         │
         ▼
-generate_music(...)
+GPTAudioMCP.generate_music
         │
         ├─ first use -> Connect Replicate
-        ├─ inspect selected model schema
-        ├─ reject attachment if model has no audio input
-        └─ pass supported attachment to Replicate
+        ├─ select provider adapter
+        ├─ inspect model schema
+        ├─ map native attachment when supported
+        └─ run generation
         │
         ▼
 generated audio URL
 ```
 
-There is no separate OpenAI/text-model API and no embedded audio widget.
+There is no embedded widget and no separate OpenAI text-model API.
 
-## Why no custom audio UI?
+## Why own the MCP?
 
-The conversation itself is part of the creative input. A separate recording panel adds an unnecessary interaction boundary when ChatGPT already has native file attachments.
+Existing music MCPs are useful references, but owning the MCP keeps the ChatGPT-facing contract stable:
 
-The primary workflow is therefore:
+- native ChatGPT file parameter shape stays under our control;
+- conversation-to-music fields stay consistent;
+- provider changes do not require changing the plugin workflow;
+- authentication stays aligned with the provider we support;
+- incompatible audio models fail explicitly rather than silently discarding the attachment.
 
-1. discuss the song/BGM/scene normally;
-2. attach an MP3/WAV/etc. directly to the ChatGPT message when needed;
-3. ask GPTAudioPlugin to generate music;
-4. ChatGPT combines the existing conversation context with the attachment in one tool call.
+## MCP tools
 
-## Replicate connection
+### `generate_music`
 
-Replicate's public API currently uses API tokens rather than a third-party OAuth consent flow.
+Primary tool.
 
-GPTAudioPlugin acts as the OAuth authorization server seen by ChatGPT:
+Inputs:
 
-1. a protected tool triggers ChatGPT's Connect flow;
-2. GPTAudioPlugin opens a **Connect Replicate** authorization page;
-3. the user opens Replicate's API-token page and creates/copies a token;
-4. the token is pasted into the authorization page, never into chat;
-5. GPTAudioPlugin validates it against Replicate;
-6. the token is encrypted locally under `.data/`;
-7. ChatGPT receives opaque OAuth access/refresh tokens.
+- `provider` — currently only `replicate`
+- optional `model`
+- `conversationSummary`
+- `directorPrompt`
+- `duration`
+- optional `referenceAudio` from ChatGPT's normal attachment control
+- optional `continuation`
 
-Protected tools:
+The file input uses ChatGPT's standard `openai/fileParams` contract.
 
-- `get_replicate_profile`
-- `inspect_replicate_model`
-- `generate_music`
+### `inspect_music_model`
 
-## Native audio attachment
+Reads the provider model schema and reports whether it accepts a text prompt, reference audio, duration, continuation, output format, and any unsupported required inputs.
 
-`generate_music` exposes an optional `referenceAudio` file parameter. The skill tells ChatGPT to pass the user's normal conversation attachment into this parameter.
+### `get_music_provider_profile`
 
-The MCP server downloads the temporary ChatGPT file URL and hands a File object to the Replicate SDK.
+Returns the connected provider identity. v0.4 maps this to the connected Replicate account.
 
-The user does not need to:
+## Provider layer
 
-- open another plugin panel;
-- click another upload button;
-- record inside an iframe;
-- repeat the creative context manually.
+```text
+src/providers/
+├─ types.ts
+├─ index.ts
+└─ replicate.ts
+```
 
-## Replicate model compatibility
+`MusicProvider` defines the internal contract:
 
-Not every Replicate-hosted model accepts audio.
+```ts
+interface MusicProvider {
+  id
+  defaultModel
+  inspectModel(credential, model)
+  generate(credential, request)
+}
+```
 
-Before generation, the server inspects the selected model's OpenAPI input schema and detects:
+Adding another backend later should be a provider implementation instead of a rewrite of the ChatGPT tool contract.
 
-- text prompt field;
-- reference/audio field;
-- duration field;
-- continuation field;
-- output-format field;
-- required inputs not yet supported by the generic adapter.
+## Replicate behavior
 
-Default:
+The Replicate adapter:
+
+1. fetches the selected model's OpenAPI input schema;
+2. detects common prompt/audio/duration/continuation fields;
+3. downloads the temporary ChatGPT attachment;
+4. converts it to a `File` for the Replicate SDK;
+5. rejects audio when the selected model has no recognizable audio input;
+6. runs the prediction and extracts the returned audio URL.
+
+Default model:
 
 ```text
 meta/musicgen
 ```
 
-MusicGen supports reference audio. If a user selects a text-only model and also attaches audio, generation fails explicitly rather than silently ignoring the file.
+## Account connection
+
+Replicate's public API uses API tokens rather than a third-party OAuth consent flow.
+
+GPTAudioMCP therefore exposes MCP OAuth to ChatGPT while using an encrypted Replicate token behind that connection:
+
+1. ChatGPT triggers Connect.
+2. The authorization page links to Replicate's API-token page.
+3. The user pastes the token into the authorization page, not chat.
+4. The MCP validates it against Replicate.
+5. The credential is encrypted under `.data/`.
+6. ChatGPT receives opaque OAuth access/refresh tokens.
 
 ## Local development
 
@@ -105,7 +137,7 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Default configuration:
+Defaults:
 
 ```env
 REPLICATE_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
@@ -113,55 +145,11 @@ PORT=8787
 PUBLIC_BASE_URL=http://127.0.0.1:8787
 ```
 
-No `REPLICATE_API_TOKEN` is stored in `.env`.
-
 MCP endpoint:
 
 ```text
 http://127.0.0.1:8787/mcp
 ```
-
-OAuth metadata:
-
-```text
-http://127.0.0.1:8787/.well-known/oauth-protected-resource
-http://127.0.0.1:8787/.well-known/oauth-authorization-server
-```
-
-## Tools
-
-### generate_music
-
-Main user-facing tool. Inputs include:
-
-- `conversationSummary`
-- `directorPrompt`
-- optional `referenceAudio` from the normal ChatGPT attachment
-- optional `model`
-- `duration`
-- optional `continuation`
-
-### inspect_replicate_model
-
-Schema/capability inspection for alternative Replicate models.
-
-### get_replicate_profile
-
-Returns the connected Replicate identity for account UI.
-
-## Package
-
-```powershell
-npm run package:plugin
-```
-
-Output:
-
-```text
-dist/gpt-audio-plugin.zip
-```
-
-The portable package contains the manifests and skill only. There is no embedded audio UI.
 
 ## Project structure
 
@@ -174,12 +162,15 @@ GPTAudioPlugin/
 ├─ skills/audio-creator/SKILL.md
 ├─ src/
 │  ├─ auth.ts
-│  ├─ replicate.ts
+│  ├─ providers/
+│  │  ├─ types.ts
+│  │  ├─ index.ts
+│  │  └─ replicate.ts
 │  └─ server.ts
 ├─ scripts/package-plugin.ps1
 └─ README.md
 ```
 
-## Separate future plugin
+## Future providers
 
-A dedicated recorder plugin can later provide microphone capture, waveform editing, trimming, and take management. That product should remain separate from this context-first generation plugin.
+The intended extension point is now explicit. Possible future providers include Suno gateways, fal.ai, or other hosted/open models, while ChatGPT continues calling the same `generate_music` tool.

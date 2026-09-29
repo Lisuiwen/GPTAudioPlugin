@@ -15,9 +15,9 @@ import {
 } from "./auth.js";
 import {
   DEFAULT_MODEL,
-  generateMusic,
-  inspectReplicateModel,
-} from "./replicate.js";
+  DEFAULT_PROVIDER_ID,
+  getMusicProvider,
+} from "./providers/index.js";
 
 const MCP_PATH = "/mcp";
 const OAUTH_SCOPES = ["replicate.read", "replicate.run"];
@@ -30,7 +30,15 @@ const OpenAIFileSchema = z.object({
   file_name: z.string().optional(),
 });
 
+const providerSchema = z
+  .literal("replicate")
+  .default(DEFAULT_PROVIDER_ID)
+  .describe(
+    "Music provider. Replicate is the only provider enabled in v0.4."
+  );
+
 const capabilitiesOutputSchema = {
+  provider: z.string(),
   model: z.string(),
   supportsTextPrompt: z.boolean(),
   promptField: z.string().optional(),
@@ -45,11 +53,12 @@ const capabilitiesOutputSchema = {
 };
 
 const generateInputSchema = {
+  provider: providerSchema,
   model: z
     .string()
     .optional()
     .describe(
-      'Replicate model as "owner/name" or "owner/name:version". Omit to use the plugin default.'
+      'Provider model identifier. For Replicate use "owner/name" or "owner/name:version". Omit to use the default model.'
     ),
   conversationSummary: z
     .string()
@@ -65,18 +74,19 @@ const generateInputSchema = {
     ),
   duration: z.number().int().min(1).max(30).default(8),
   referenceAudio: OpenAIFileSchema.optional().describe(
-    "The user's audio attachment from the ChatGPT conversation. Pass the native ChatGPT attachment here when the selected Replicate model supports audio conditioning."
+    "The user's audio attachment from the normal ChatGPT conversation. Pass it directly when the selected model supports reference audio."
   ),
   continuation: z
     .boolean()
     .default(false)
     .describe(
-      "When supported by the selected model, continue/extend the attached reference audio instead of using it only as conditioning."
+      "When supported by the selected model, extend/continue the attached reference audio."
     ),
 };
 
 const generationOutputSchema = {
   status: z.string(),
+  provider: z.string(),
   audioUrl: z.string().optional(),
   model: z.string(),
   prompt: z.string().optional(),
@@ -100,29 +110,32 @@ function authRequired(baseUrl: string) {
   };
 }
 
-function createAudioServer(
+function createMusicServer(
   authSession: AuthSession | undefined,
   baseUrl: string
 ): McpServer {
   const server = new McpServer(
     {
-      name: "gpt-audio-plugin-server",
-      version: "0.3.0",
+      name: "gpt-audio-mcp",
+      version: "0.4.0",
     },
     {
       instructions:
-        "GPTAudioPlugin is UI-less. Reuse the current ChatGPT conversation as the reasoning layer. When the user attaches an audio file in ChatGPT, pass that native attachment directly to generate_music.referenceAudio. Compose conversationSummary and directorPrompt from the current chat. Do not ask the user to re-upload the file into a custom UI and do not call a separate text-model API. Protected Replicate tools require the user to connect their own Replicate account.",
+        "This is a UI-less music generation MCP for ChatGPT. Reuse the current ChatGPT conversation as the reasoning layer. If the user attached an audio file in ChatGPT, pass that native attachment directly to generate_music.referenceAudio. Compose conversationSummary and directorPrompt from the current chat. Do not ask the user to upload the same file again and do not call a separate text-model API. Replicate is the only enabled provider in v0.4; provider plumbing is isolated so more providers can be added later.",
     }
   );
 
   server.registerTool(
-    "get_replicate_profile",
+    "get_music_provider_profile",
     {
-      title: "Replicate profile",
+      title: "Music provider profile",
       description:
-        "Return the Replicate account connected to GPT Audio Plugin.",
-      inputSchema: {},
+        "Return the currently connected music-provider identity. v0.4 uses Replicate.",
+      inputSchema: {
+        provider: providerSchema,
+      },
       outputSchema: {
+        provider: z.string(),
         id: z.string(),
         name: z.string().optional(),
         nickname: z.string().optional(),
@@ -137,29 +150,39 @@ function createAudioServer(
         "openai/profile": true,
       },
     },
-    async () => {
+    async (args) => {
       if (!authSession) return authRequired(baseUrl);
 
-      const profile = {
-        id: authSession.profileId,
-        name: authSession.name || authSession.username,
-        nickname: `${authSession.username} — Replicate`,
-      };
-
       return {
-        content: [{ type: "text", text: JSON.stringify(profile) }],
-        structuredContent: profile,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              provider: args.provider,
+              id: authSession.profileId,
+              name: authSession.name || authSession.username,
+              nickname: `${authSession.username} — Replicate`,
+            }),
+          },
+        ],
+        structuredContent: {
+          provider: args.provider,
+          id: authSession.profileId,
+          name: authSession.name || authSession.username,
+          nickname: `${authSession.username} — Replicate`,
+        },
       };
     }
   );
 
   server.registerTool(
-    "inspect_replicate_model",
+    "inspect_music_model",
     {
-      title: "Check Replicate model",
+      title: "Inspect music model",
       description:
-        "Inspect a Replicate model's input schema. Use this when the user selects a non-default model or when you need to know whether an attached audio file can be passed to it.",
+        "Inspect the selected provider model before generation. Use this when the user picks a non-default model or when you need to verify that an attached audio file is supported.",
       inputSchema: {
+        provider: providerSchema,
         model: z.string().default(DEFAULT_MODEL),
       },
       outputSchema: capabilitiesOutputSchema,
@@ -170,17 +193,18 @@ function createAudioServer(
       },
       _meta: {
         securitySchemes: OAUTH_SECURITY,
-        "openai/toolInvocation/invoking": "Checking Replicate model…",
-        "openai/toolInvocation/invoked": "Model capabilities loaded.",
+        "openai/toolInvocation/invoking": "Checking music model…",
+        "openai/toolInvocation/invoked": "Music model capabilities loaded.",
       },
     },
     async (args) => {
       if (!authSession) return authRequired(baseUrl);
 
       try {
-        const capabilities = await inspectReplicateModel(
+        const provider = getMusicProvider(args.provider);
+        const capabilities = await provider.inspectModel(
           authSession.replicateToken,
-          args.model || DEFAULT_MODEL
+          args.model || provider.defaultModel
         );
 
         return {
@@ -188,8 +212,8 @@ function createAudioServer(
             {
               type: "text",
               text: capabilities.supportsAudioInput
-                ? `Model ${capabilities.model} supports reference audio via ${capabilities.audioField}.`
-                : `Model ${capabilities.model} does not expose a recognizable audio input.`,
+                ? `${capabilities.provider}/${capabilities.model} supports reference audio via ${capabilities.audioField}.`
+                : `${capabilities.provider}/${capabilities.model} does not expose a recognizable audio input.`,
             },
           ],
           structuredContent: capabilities,
@@ -201,6 +225,7 @@ function createAudioServer(
         return {
           content: [{ type: "text", text: message }],
           structuredContent: {
+            provider: args.provider,
             model: args.model || DEFAULT_MODEL,
             supportsTextPrompt: false,
             supportsAudioInput: false,
@@ -217,9 +242,9 @@ function createAudioServer(
   server.registerTool(
     "generate_music",
     {
-      title: "Generate music with Replicate",
+      title: "Generate music",
       description:
-        "Generate music from the current ChatGPT conversation and, when present, the user's native ChatGPT audio attachment. The server automatically inspects the selected Replicate model before generation and rejects reference audio if that model does not support audio input.",
+        "Generate music from the current ChatGPT conversation and optional native ChatGPT audio attachment. The MCP automatically inspects the selected provider model, maps compatible inputs, and rejects reference audio when the model cannot consume it.",
       inputSchema: generateInputSchema,
       outputSchema: generationOutputSchema,
       annotations: {
@@ -230,7 +255,7 @@ function createAudioServer(
       _meta: {
         securitySchemes: OAUTH_SECURITY,
         "openai/fileParams": ["referenceAudio"],
-        "openai/toolInvocation/invoking": "Generating music with Replicate…",
+        "openai/toolInvocation/invoking": "Generating music…",
         "openai/toolInvocation/invoked": "Music generation finished.",
       },
     },
@@ -238,7 +263,8 @@ function createAudioServer(
       if (!authSession) return authRequired(baseUrl);
 
       try {
-        const result = await generateMusic(authSession.replicateToken, {
+        const provider = getMusicProvider(args.provider);
+        const result = await provider.generate(authSession.replicateToken, {
           model: args.model,
           conversationSummary: args.conversationSummary,
           directorPrompt: args.directorPrompt,
@@ -256,12 +282,13 @@ function createAudioServer(
             {
               type: "text",
               text: referenceAudioUsed
-                ? `Generated music with Replicate using the attached audio: ${result.audioUrl}`
-                : `Generated music with Replicate: ${result.audioUrl}`,
+                ? `Generated music with ${result.provider} using the attached audio: ${result.audioUrl}`
+                : `Generated music with ${result.provider}: ${result.audioUrl}`,
             },
           ],
           structuredContent: {
             status: "succeeded",
+            provider: result.provider,
             audioUrl: result.audioUrl,
             model: result.model,
             prompt: result.prompt,
@@ -282,6 +309,7 @@ function createAudioServer(
           ],
           structuredContent: {
             status: "failed",
+            provider: args.provider,
             model: args.model || DEFAULT_MODEL,
             referenceAudioUsed: false,
             error: message,
@@ -330,16 +358,18 @@ const httpServer = createServer(async (req, res) => {
       .writeHead(200, { "content-type": "application/json" })
       .end(
         JSON.stringify({
-          name: "GPTAudioPlugin",
+          name: "GPTAudioMCP",
           status: "ok",
-          version: "0.3.0",
+          version: "0.4.0",
           ui: false,
           mcp: MCP_PATH,
+          providers: [DEFAULT_PROVIDER_ID],
+          defaultProvider: DEFAULT_PROVIDER_ID,
+          defaultModel: DEFAULT_MODEL,
           oauth: {
             resourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
             authorizationServer: baseUrl,
           },
-          model: DEFAULT_MODEL,
         })
       );
     return;
@@ -355,7 +385,7 @@ const httpServer = createServer(async (req, res) => {
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     const authSession = authenticateRequest(req);
-    const server = createAudioServer(authSession, baseUrl);
+    const server = createMusicServer(authSession, baseUrl);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -383,8 +413,9 @@ const httpServer = createServer(async (req, res) => {
 
 httpServer.listen(port, "127.0.0.1", () => {
   console.log(
-    `GPTAudioPlugin MCP server listening on http://127.0.0.1:${port}${MCP_PATH}`
+    `GPTAudioMCP listening on http://127.0.0.1:${port}${MCP_PATH}`
   );
   console.log("UI: disabled; use native ChatGPT attachments");
+  console.log(`Provider: ${DEFAULT_PROVIDER_ID}`);
   console.log(`OAuth issuer: ${baseUrl}`);
 });

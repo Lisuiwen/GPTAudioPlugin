@@ -1,7 +1,14 @@
 import { File } from "node:buffer";
 import Replicate from "replicate";
 
-export const DEFAULT_MODEL =
+import type {
+  GenerateMusicInput,
+  GenerateMusicResult,
+  ModelCapabilities,
+  MusicProvider,
+} from "./types.js";
+
+const DEFAULT_MODEL =
   process.env.REPLICATE_MODEL?.trim() ||
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
@@ -17,38 +24,6 @@ type SchemaProperty = {
 type ModelSchema = {
   properties: Record<string, SchemaProperty>;
   required: string[];
-};
-
-export type ModelCapabilities = {
-  model: string;
-  supportsTextPrompt: boolean;
-  promptField?: string;
-  supportsAudioInput: boolean;
-  audioField?: string;
-  durationField?: string;
-  continuationField?: string;
-  outputFormatField?: string;
-  inputFields: string[];
-  requiredFields: string[];
-  unsupportedRequiredFields: string[];
-};
-
-export type GenerateMusicInput = {
-  model?: string;
-  conversationSummary: string;
-  directorPrompt: string;
-  duration: number;
-  referenceAudioUrl?: string;
-  referenceAudioName?: string;
-  referenceAudioMimeType?: string;
-  continuation?: boolean;
-};
-
-export type GenerateMusicResult = {
-  audioUrl: string;
-  model: string;
-  prompt: string;
-  capabilities: ModelCapabilities;
 };
 
 const PROMPT_CANDIDATES = [
@@ -129,7 +104,7 @@ function schemaFromOpenApi(openapi: unknown): ModelSchema {
 }
 
 async function fetchModelSchema(
-  replicateToken: string,
+  credential: string,
   model: string
 ): Promise<ModelSchema> {
   const { owner, name, version } = splitModelReference(model);
@@ -143,7 +118,7 @@ async function fetchModelSchema(
 
   const response = await fetch(endpoint, {
     headers: {
-      Authorization: `Bearer ${replicateToken}`,
+      Authorization: `Bearer ${credential}`,
       Accept: "application/json",
     },
   });
@@ -208,11 +183,11 @@ function inferAudioField(
   return undefined;
 }
 
-export async function inspectReplicateModel(
-  replicateToken: string,
+async function inspectModel(
+  credential: string,
   model = DEFAULT_MODEL
 ): Promise<ModelCapabilities> {
-  const schema = await fetchModelSchema(replicateToken, model);
+  const schema = await fetchModelSchema(credential, model);
   const properties = schema.properties;
 
   const promptField = firstExisting(properties, PROMPT_CANDIDATES);
@@ -227,7 +202,7 @@ export async function inspectReplicateModel(
     OUTPUT_FORMAT_CANDIDATES
   );
 
-  const providedByPlugin = new Set(
+  const providedByProvider = new Set(
     [
       promptField,
       audioField,
@@ -241,11 +216,12 @@ export async function inspectReplicateModel(
 
   const unsupportedRequiredFields = schema.required.filter(
     (field) =>
-      !providedByPlugin.has(field) &&
+      !providedByProvider.has(field) &&
       properties[field]?.default === undefined
   );
 
   return {
+    provider: "replicate",
     model,
     supportsTextPrompt: Boolean(promptField),
     promptField,
@@ -336,12 +312,12 @@ function extractUrl(output: unknown): string | undefined {
   return undefined;
 }
 
-export async function generateMusic(
-  replicateToken: string,
+async function generate(
+  credential: string,
   request: GenerateMusicInput
 ): Promise<GenerateMusicResult> {
   const model = request.model?.trim() || DEFAULT_MODEL;
-  const capabilities = await inspectReplicateModel(replicateToken, model);
+  const capabilities = await inspectModel(credential, model);
 
   if (!capabilities.promptField) {
     throw new Error(
@@ -377,8 +353,7 @@ export async function generateMusic(
   }
 
   if (capabilities.outputFormatField) {
-    const propertyName = capabilities.outputFormatField;
-    input[propertyName] = "mp3";
+    input[capabilities.outputFormatField] = "mp3";
   }
 
   if (capabilities.continuationField && request.referenceAudioUrl) {
@@ -410,7 +385,7 @@ export async function generateMusic(
   }
 
   const replicate = new Replicate({
-    auth: replicateToken,
+    auth: credential,
   });
 
   const output = await replicate.run(model as never, { input });
@@ -423,9 +398,17 @@ export async function generateMusic(
   }
 
   return {
+    provider: "replicate",
     audioUrl,
     model,
     prompt: finalPrompt,
     capabilities,
   };
 }
+
+export const replicateProvider: MusicProvider = {
+  id: "replicate",
+  defaultModel: DEFAULT_MODEL,
+  inspectModel,
+  generate,
+};
