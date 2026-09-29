@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,6 @@
     "package:plugin": "powershell -ExecutionPolicy Bypass -File scripts/package-plugin.ps1"
   },
   "dependencies": {
-    "@modelcontextprotocol/ext-apps": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.20.2",
     "dotenv": "^16.4.5",
     "replicate": "^1.4.0",
