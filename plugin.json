@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "gpt-audio-plugin",
+  "version": "0.1.0",
+  "description": "Create music from the current ChatGPT conversation and optional reference audio through Replicate.",
+  "author": {
+    "name": "Lisuiwen"
+  },
+  "repository": "https://github.com/Lisuiwen/GPTAudioPlugin",
+  "license": "MIT",
+  "keywords": ["audio", "music", "replicate", "chatgpt", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "GPT Audio Plugin",
+        "shortDescription": "Turn ChatGPT context and reference audio into generated music.",
+        "longDescription": "Use the current conversation as creative direction, optionally add a recorded or uploaded reference clip, and generate music through your own Replicate account.",
+        "developerName": "Lisuiwen",
+        "category": "Creativity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://github.com/Lisuiwen/GPTAudioPlugin",
+        "defaultPrompt": [
+          "Open GPT Audio Plugin using the current conversation as the creative context.",
+          "Use our discussion so far as direction for a new piece of music."
+        ]
+      }
+    }
+  }
+}

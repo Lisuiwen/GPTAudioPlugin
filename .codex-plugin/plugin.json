@@ -1,0 +1,7 @@
+{
+  "name": "gpt-audio-plugin",
+  "version": "0.1.0",
+  "description": "Create music from ChatGPT conversation context and optional reference audio through Replicate.",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

@@ -1,0 +1,2 @@
+[plugins."gpt-audio-plugin@gpt-audio-local"]
+enabled = true

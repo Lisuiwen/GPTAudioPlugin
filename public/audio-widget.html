@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GPT Audio Plugin</title>
+  <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light dark;
+    }
+    body {
+      margin: 0;
+      padding: 14px;
+      background: transparent;
+    }
+    main {
+      display: grid;
+      gap: 12px;
+    }
+    h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+    .hint {
+      margin: 0;
+      opacity: .7;
+      font-size: 12px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    textarea,
+    input[type="number"] {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: color-mix(in srgb, Canvas 96%, currentColor 4%);
+      color: CanvasText;
+      font: inherit;
+      resize: vertical;
+    }
+    textarea {
+      min-height: 72px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      border-radius: 10px;
+      padding: 8px 11px;
+      background: color-mix(in srgb, Canvas 92%, currentColor 8%);
+      color: CanvasText;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary {
+      background: CanvasText;
+      color: Canvas;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+    }
+    .file {
+      font-size: 12px;
+      opacity: .8;
+      overflow-wrap: anywhere;
+    }
+    #result {
+      display: none;
+      gap: 8px;
+      padding-top: 4px;
+    }
+    #result.visible {
+      display: grid;
+    }
+    #error {
+      display: none;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    #error.visible {
+      display: block;
+    }
+    audio {
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div>
+      <h2>GPT Audio Plugin</h2>
+      <p class="hint">Chat context → optional reference audio → Replicate</p>
+    </div>
+
+    <label>
+      Conversation context
+      <textarea id="context" placeholder="ChatGPT will pass a summary of the current conversation here."></textarea>
+    </label>
+
+    <label>
+      Extra direction
+      <textarea id="prompt" placeholder="Optional: tempo, instrumentation, structure, changes..."></textarea>
+    </label>
+
+    <div class="row">
+      <label style="width: 110px;">
+        Duration (sec)
+        <input id="duration" type="number" min="1" max="30" value="8" />
+      </label>
+      <button id="upload" type="button">Upload audio</button>
+      <button id="record" type="button">Record</button>
+      <input id="fileInput" type="file" accept="audio/*" hidden />
+    </div>
+
+    <div id="fileLabel" class="file">No reference audio selected.</div>
+
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:500;">
+        <input id="continuation" type="checkbox" />
+        Continue reference audio
+      </label>
+    </div>
+
+    <button id="generate" class="primary" type="button">Generate with Replicate</button>
+
+    <div id="error"></div>
+
+    <section id="result">
+      <audio id="player" controls></audio>
+      <div id="model" class="file"></div>
+    </section>
+  </main>
+
+  <script>
+    const openai = window.openai;
+
+    const contextEl = document.querySelector("#context");
+    const promptEl = document.querySelector("#prompt");
+    const durationEl = document.querySelector("#duration");
+    const continuationEl = document.querySelector("#continuation");
+    const uploadEl = document.querySelector("#upload");
+    const recordEl = document.querySelector("#record");
+    const fileInputEl = document.querySelector("#fileInput");
+    const fileLabelEl = document.querySelector("#fileLabel");
+    const generateEl = document.querySelector("#generate");
+    const errorEl = document.querySelector("#error");
+    const resultEl = document.querySelector("#result");
+    const playerEl = document.querySelector("#player");
+    const modelEl = document.querySelector("#model");
+
+    let referenceAudio = null;
+    let mediaRecorder = null;
+    let recordingStream = null;
+    let chunks = [];
+
+    const initialInput = openai?.toolInput ?? {};
+    const initialOutput = openai?.toolOutput ?? {};
+
+    contextEl.value =
+      initialInput.contextSummary ??
+      initialOutput.contextSummary ??
+      "";
+
+    promptEl.value =
+      initialInput.initialPrompt ??
+      initialOutput.initialPrompt ??
+      "";
+
+    function setError(message) {
+      errorEl.textContent = message || "";
+      errorEl.classList.toggle("visible", Boolean(message));
+    }
+
+    function setReferenceAudio(file) {
+      referenceAudio = file;
+      fileLabelEl.textContent = file
+        ? `Reference: ${file.file_name || file.file_id}`
+        : "No reference audio selected.";
+    }
+
+    async function uploadToChatGPT(file) {
+      if (!openai?.uploadFile || !openai?.getFileDownloadUrl) {
+        throw new Error(
+          "This ChatGPT host does not expose the file upload APIs required by the plugin."
+        );
+      }
+
+      const uploaded = await openai.uploadFile(file);
+      const resolved = await openai.getFileDownloadUrl({
+        fileId: uploaded.fileId,
+      });
+
+      return {
+        download_url: resolved.downloadUrl,
+        file_id: uploaded.fileId,
+        mime_type: file.type || "audio/webm",
+        file_name: file.name || "reference-audio.webm",
+      };
+    }
+
+    uploadEl.addEventListener("click", () => fileInputEl.click());
+
+    fileInputEl.addEventListener("change", async () => {
+      const file = fileInputEl.files?.[0];
+      if (!file) return;
+
+      setError("");
+      fileLabelEl.textContent = "Uploading reference audio…";
+
+      try {
+        setReferenceAudio(await uploadToChatGPT(file));
+      } catch (error) {
+        setReferenceAudio(null);
+        setError(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    recordEl.addEventListener("click", async () => {
+      setError("");
+
+      if (mediaRecorder?.state === "recording") {
+        mediaRecorder.stop();
+        recordEl.textContent = "Record";
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Microphone recording is not available in this host.");
+        return;
+      }
+
+      try {
+        recordingStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        chunks = [];
+        mediaRecorder = new MediaRecorder(recordingStream);
+
+        mediaRecorder.addEventListener("dataavailable", (event) => {
+          if (event.data.size > 0) chunks.push(event.data);
+        });
+
+        mediaRecorder.addEventListener("stop", async () => {
+          try {
+            const mimeType = mediaRecorder.mimeType || "audio/webm";
+            const blob = new Blob(chunks, { type: mimeType });
+            const file = new File(
+              [blob],
+              `recording-${Date.now()}.webm`,
+              { type: mimeType }
+            );
+
+            fileLabelEl.textContent = "Uploading recording…";
+            setReferenceAudio(await uploadToChatGPT(file));
+          } catch (error) {
+            setReferenceAudio(null);
+            setError(error instanceof Error ? error.message : String(error));
+          } finally {
+            recordingStream?.getTracks().forEach((track) => track.stop());
+            recordingStream = null;
+          }
+        });
+
+        mediaRecorder.start();
+        recordEl.textContent = "Stop recording";
+        fileLabelEl.textContent = "Recording…";
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    function renderResult(data) {
+      if (!data) return;
+
+      if (data.error) {
+        setError(data.error);
+      }
+
+      if (data.audioUrl) {
+        playerEl.src = data.audioUrl;
+        modelEl.textContent = data.model
+          ? `Model: ${data.model}`
+          : "";
+        resultEl.classList.add("visible");
+      }
+    }
+
+    renderResult(initialOutput);
+
+    generateEl.addEventListener("click", async () => {
+      setError("");
+      resultEl.classList.remove("visible");
+
+      const contextSummary = contextEl.value.trim();
+      if (!contextSummary) {
+        setError("Conversation context is required.");
+        return;
+      }
+
+      if (!openai?.callTool) {
+        setError("This host does not expose the ChatGPT tool-call bridge.");
+        return;
+      }
+
+      generateEl.disabled = true;
+      generateEl.textContent = "Generating…";
+
+      try {
+        const response = await openai.callTool("generate_music", {
+          contextSummary,
+          prompt: promptEl.value.trim() || undefined,
+          duration: Math.max(
+            1,
+            Math.min(30, Number(durationEl.value || 8))
+          ),
+          referenceAudio: referenceAudio || undefined,
+          continuation: Boolean(
+            referenceAudio && continuationEl.checked
+          ),
+        });
+
+        renderResult(response?.structuredContent ?? response);
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+      } finally {
+        generateEl.disabled = false;
+        generateEl.textContent = "Generate with Replicate";
+      }
+    });
+  </script>
+</body>
+</html>
