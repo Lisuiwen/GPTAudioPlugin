@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=72", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audio-sonic-mcp"
+version = "1.2.0"
+description = "Local-first MCP server and CLI that turns a YouTube link or a local audio file into a structured sonic signature: BPM, section-by-section key, production profile, and a 512-dim CLAP vibe embedding"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp==1.27.0",
+    "yt-dlp==2026.3.17",
+    "librosa==0.11.0",
+    "soundfile==0.13.1",
+    "numpy>=2.0.0",
+    "scipy>=1.10.0",
+    "psutil==7.2.2",
+]
+
+[project.optional-dependencies]
+# Optional ML stack: Demucs stem separation + CLAP vibe vector/tags. Without it
+# the pipeline still runs (HPSS fallback for separation, librosa composite for
+# the vibe vector, no vibe_tags), just at lower quality.
+clap = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "transformers>=4.38.0",
+    "demucs>=4.0.1",
+]
+# Beat tracking. madmom is the PRIMARY BPM engine, but it is unmaintained
+# (0.16.1, classifiers stop at Python 3.7) and needs a Cython build, so it
+# cannot be a hard dependency. Without it BPM falls back to librosa and every
+# payload reports "bpm_engine": "librosa-fallback".
+beats = [
+    "madmom>=0.16.1",
+]
+# Cloud / remote transports: TRANSPORT_MODE=sse or hybrid. "hybrid" serves the
+# MCP SSE endpoint alongside the REST API in app_cloud.py.
+cloud = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.0.0",
+]
+dev = [
+    "pytest==8.3.5",
+    "pytest-asyncio==0.24.0",
+]
+
+[project.scripts]
+audio-sonic-mcp = "server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.setuptools]
+py-modules = ["server"]
