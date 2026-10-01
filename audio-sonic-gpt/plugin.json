@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "audio-sonic-gpt",
   "version": "0.1.0",
-  "description": "Analyze attached music locally with Audio Sonic MCP: tempo, key, structure, vibe, instruments and production features without an external model API.",
+  "description": "Analyze attached music locally with Audio Sonic MCP: tempo, key and key map, vibe tags, vocal presence and production features without an external model API.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -24,7 +24,7 @@
       "interface": {
         "displayName": "Audio Sonic Listener",
         "shortDescription": "Analyze attached music locally.",
-        "longDescription": "Attach an MP3/WAV/FLAC/M4A/OGG/AAC in ChatGPT and analyze musical features locally through the vendored Audio Sonic MCP pipeline. No external music-model API is required.",
+        "longDescription": "Attach an MP3/WAV/FLAC/M4A/OGG/AAC in ChatGPT and analyze musical features locally through the vendored Audio Sonic MCP pipeline. It returns tempo, key/key-map, vibe tags when CLAP is installed, and production-profile measurements. No external music-model API is required.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [
