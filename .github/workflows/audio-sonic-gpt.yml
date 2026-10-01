@@ -1,0 +1,25 @@
+name: Audio Sonic GPT adapter checks
+
+on:
+  push:
+    branches:
+      - audio-sonic-gpt-adapter
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc -p audio-sonic-gpt/tsconfig.json --noEmit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m compileall -q vendor/audio-sonic-mcp
+      - run: python -m json.tool audio-sonic-gpt/plugin.json > /dev/null
+      - run: python -m json.tool audio-sonic-gpt/mcp.json > /dev/null
