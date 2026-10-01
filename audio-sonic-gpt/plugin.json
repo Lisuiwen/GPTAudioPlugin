@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "audio-sonic-gpt",
+  "version": "0.1.0",
+  "description": "Analyze attached music locally with Audio Sonic MCP: tempo, key, structure, vibe, instruments and production features without an external model API.",
+  "author": {
+    "name": "Lisuiwen"
+  },
+  "repository": "https://github.com/Lisuiwen/GPTAudioPlugin",
+  "license": "MIT",
+  "keywords": [
+    "audio",
+    "music",
+    "analysis",
+    "chatgpt",
+    "mcp",
+    "local",
+    "clap",
+    "demucs",
+    "librosa"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Audio Sonic Listener",
+        "shortDescription": "Analyze attached music locally.",
+        "longDescription": "Attach an MP3/WAV/FLAC/M4A/OGG/AAC in ChatGPT and analyze musical features locally through the vendored Audio Sonic MCP pipeline. No external music-model API is required.",
+        "developerName": "Lisuiwen",
+        "category": "Creativity",
+        "capabilities": [
+          "Read"
+        ],
+        "websiteURL": "https://github.com/Lisuiwen/GPTAudioPlugin",
+        "defaultPrompt": [
+          "Analyze the music file I attached and explain its tempo, key, mood and production profile.",
+          "Analyze 42 to 58 seconds of my attached track and tell me what changes musically."
+        ]
+      }
+    }
+  }
+}
