@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";\nimport { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -20,7 +20,7 @@ import { z } from "zod";
 
 const MCP_PATH = "/mcp";
 const PORT = Number(process.env.AUDIO_SONIC_PORT ?? 8790);
-const REPO_ROOT = resolve(process.cwd());
+const ADAPTER_DIR = dirname(fileURLToPath(import.meta.url));\nconst REPO_ROOT = resolve(ADAPTER_DIR, "..");
 const VENDOR_DIR = resolve(
   process.env.AUDIO_SONIC_VENDOR_DIR ??
     join(REPO_ROOT, "vendor", "audio-sonic-mcp")
