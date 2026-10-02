@@ -1,6 +1,6 @@
 # GPTAudioPlugin / GPTAudioMCP
 
-A small, UI-less ChatGPT plugin plus a self-owned music-generation MCP.
+A small, UI-less ChatGPT plugin plus a self-owned MCP for both music generation and multimodal music listening.
 
 The design deliberately keeps two concerns separate:
 
@@ -50,6 +50,27 @@ Existing music MCPs are useful references, but owning the MCP keeps the ChatGPT-
 - incompatible audio models fail explicitly rather than silently discarding the attachment.
 
 ## MCP tools
+
+### `analyze_music`
+
+Listens to a native ChatGPT audio attachment with a multimodal audio-language model on Replicate and returns text analysis grounded in the actual audio.
+
+Inputs:
+
+- `audio` — required native ChatGPT audio attachment
+- `question` — what the user wants to know about the audio
+- optional `conversationSummary`
+- optional `analysisFocus` list
+- optional `model`
+
+Default analysis model:
+
+```text
+lucataco/qwen2.5-omni-7b
+```
+
+The provider disables audio output when the selected model exposes `generate_audio`, because ChatGPT only needs the textual listening result.
+
 
 ### `generate_music`
 
@@ -141,6 +162,7 @@ Defaults:
 
 ```env
 REPLICATE_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
+REPLICATE_ANALYSIS_MODEL=lucataco/qwen2.5-omni-7b
 PORT=8787
 PUBLIC_BASE_URL=http://127.0.0.1:8787
 ```
