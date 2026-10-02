@@ -18,6 +18,10 @@ const DEFAULT_COVER_MODEL =
   process.env.REPLICATE_COVER_MODEL?.trim() ||
   "minimax/music-cover";
 
+const DEFAULT_VOCAL_MODEL =
+  process.env.REPLICATE_VOCAL_MODEL?.trim() ||
+  "minimax/music-2.6";
+
 const DEFAULT_CONTINUATION_MODEL =
   process.env.REPLICATE_CONTINUATION_MODEL?.trim() ||
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
@@ -309,6 +313,13 @@ export function selectReplicateGenerationRoute(
   const explicitModel = request.model?.trim();
 
   if (explicitModel) {
+    if (
+      ["cover", "reference", "continue"].includes(requestedMode) &&
+      !request.referenceAudioUrl
+    ) {
+      requireReferenceAudio(request, requestedMode);
+    }
+
     return {
       model: explicitModel,
       generationMode:
@@ -338,7 +349,10 @@ export function selectReplicateGenerationRoute(
   }
 
   if (requestedMode === "generate") {
-    return { model: DEFAULT_MODEL, generationMode: "generate" };
+    return {
+      model: request.instrumental === false ? DEFAULT_VOCAL_MODEL : DEFAULT_MODEL,
+      generationMode: "generate",
+    };
   }
 
   if (request.referenceAudioUrl) {
@@ -359,7 +373,10 @@ export function selectReplicateGenerationRoute(
     };
   }
 
-  return { model: DEFAULT_MODEL, generationMode: "generate" };
+  return {
+    model: request.instrumental === false ? DEFAULT_VOCAL_MODEL : DEFAULT_MODEL,
+    generationMode: "generate",
+  };
 }
 
 function clampText(value: string, maxLength: number): string {
@@ -377,6 +394,12 @@ async function buildGenerationInput(
   generationMode: GenerateMusicResult["generationMode"]
 ): Promise<Record<string, unknown>> {
   if (model.startsWith("fishaudio/ace-step-1.5")) {
+    if (request.referenceAudioUrl) {
+      throw new Error(
+        "The current Replicate ACE-Step 1.5 schema does not accept reference audio. Use cover/reference/continue mode or remove the attachment."
+      );
+    }
+
     const instrumental = request.instrumental !== false;
     if (!instrumental && !request.lyrics?.trim()) {
       throw new Error(
@@ -394,6 +417,12 @@ async function buildGenerationInput(
   }
 
   if (model.startsWith("minimax/music-2.6")) {
+    if (request.referenceAudioUrl) {
+      throw new Error(
+        "minimax/music-2.6 on Replicate does not accept reference audio. Use cover mode for a vocal source or reference mode for melody conditioning."
+      );
+    }
+
     const instrumental = request.instrumental !== false;
     const input: Record<string, unknown> = {
       prompt: clampText(finalPrompt, 2000),
@@ -413,10 +442,14 @@ async function buildGenerationInput(
   }
 
   if (model.startsWith("minimax/music-cover")) {
-    const audioUrl = requireReferenceAudio(request, "cover");
+    requireReferenceAudio(request, "cover");
     const input: Record<string, unknown> = {
       prompt: clampText(finalPrompt, 2000),
-      audio_url: audioUrl,
+      audio_url: await downloadReferenceAudio(
+        request.referenceAudioUrl!,
+        request.referenceAudioName,
+        request.referenceAudioMimeType
+      ),
       audio_format: "mp3",
     };
 
