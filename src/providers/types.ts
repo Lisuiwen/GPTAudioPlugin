@@ -34,9 +34,28 @@ export type GenerateMusicResult = {
   capabilities: ModelCapabilities;
 };
 
+export type AnalyzeMusicInput = {
+  model?: string;
+  question: string;
+  conversationSummary?: string;
+  analysisFocus?: string[];
+  audioUrl: string;
+  audioName?: string;
+  audioMimeType?: string;
+};
+
+export type AnalyzeMusicResult = {
+  provider: MusicProviderId;
+  model: string;
+  prompt: string;
+  answer: string;
+  capabilities: ModelCapabilities;
+};
+
 export interface MusicProvider {
   readonly id: MusicProviderId;
   readonly defaultModel: string;
+  readonly defaultAnalysisModel: string;
   inspectModel(
     credential: string,
     model?: string
@@ -45,4 +64,8 @@ export interface MusicProvider {
     credential: string,
     request: GenerateMusicInput
   ): Promise<GenerateMusicResult>;
+  analyze(
+    credential: string,
+    request: AnalyzeMusicInput
+  ): Promise<AnalyzeMusicResult>;
 }
