@@ -10,6 +10,7 @@ const providers: Record<MusicProviderId, MusicProvider> = {
 
 export const DEFAULT_PROVIDER_ID: MusicProviderId = "replicate";
 export const DEFAULT_MODEL = replicateProvider.defaultModel;
+export const DEFAULT_ANALYSIS_MODEL = replicateProvider.defaultAnalysisModel;
 
 export function getMusicProvider(
   provider: string | undefined
@@ -29,6 +30,8 @@ export function getMusicProvider(
 }
 
 export type {
+  AnalyzeMusicInput,
+  AnalyzeMusicResult,
   GenerateMusicInput,
   GenerateMusicResult,
   ModelCapabilities,
