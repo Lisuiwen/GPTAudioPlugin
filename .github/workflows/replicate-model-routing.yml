@@ -1,0 +1,24 @@
+name: Replicate model routing checks
+
+on:
+  push:
+    branches:
+      - replicate-model-routing-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: node -e "const p=require('./plugin.json'); const c=require('./.codex-plugin/plugin.json'); const pkg=require('./package.json'); if(p.version!==pkg.version||c.version!==pkg.version) process.exit(1)"
