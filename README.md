@@ -12,7 +12,7 @@ GPTAudioMCP
   = stable music tool contract + provider adapters
 ```
 
-Replicate is the only provider enabled in v0.4, but the MCP no longer hard-wires provider logic into the tool layer.
+Replicate is the only provider. Starting in v0.6, generation stays on Replicate but routes different music tasks to different Replicate models.
 
 ## User flow
 
@@ -74,19 +74,34 @@ The provider disables audio output when the selected model exposes `generate_aud
 
 ### `generate_music`
 
-Primary tool.
+Primary generation/transform tool.
 
 Inputs:
 
-- `provider` — currently only `replicate`
-- optional `model`
+- `provider` — `replicate`
+- optional `model` — explicit Replicate model override
+- `generationMode` — `auto | generate | cover | reference | continue`
 - `conversationSummary`
 - `directorPrompt`
 - `duration`
+- optional `lyrics`
+- `instrumental`
+- `autoLyrics`
 - optional `referenceAudio` from ChatGPT's normal attachment control
-- optional `continuation`
+- optional `continuation` for backward compatibility
 
 The file input uses ChatGPT's standard `openai/fileParams` contract.
+
+Default Replicate routing:
+
+```text
+new music / BGM              -> fishaudio/ace-step-1.5
+vocal reference cover/remix  -> minimax/music-cover
+melody reference             -> meta/musicgen (stereo-melody-large)
+continuation                 -> meta/musicgen (stereo-melody-large)
+```
+
+An explicit `model` bypasses automatic model selection.
 
 ### `inspect_music_model`
 
@@ -129,11 +144,19 @@ The Replicate adapter:
 5. rejects audio when the selected model has no recognizable audio input;
 6. runs the prediction and extracts the returned audio URL.
 
-Default model:
+Default new-music model:
 
 ```text
-meta/musicgen
+fishaudio/ace-step-1.5
 ```
+
+Reference-cover model:
+
+```text
+minimax/music-cover
+```
+
+MusicGen remains the reference-melody and continuation fallback.
 
 ## Account connection
 
@@ -161,7 +184,9 @@ npm run dev
 Defaults:
 
 ```env
-REPLICATE_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
+REPLICATE_MODEL=fishaudio/ace-step-1.5
+REPLICATE_COVER_MODEL=minimax/music-cover
+REPLICATE_CONTINUATION_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
 REPLICATE_ANALYSIS_MODEL=lucataco/qwen2.5-omni-7b
 PORT=8787
 PUBLIC_BASE_URL=http://127.0.0.1:8787
@@ -173,10 +198,10 @@ MCP endpoint:
 http://127.0.0.1:8787/mcp
 ```
 
-## Deployment and OAuth recovery (v0.5.1)
+## Deployment and OAuth recovery (v0.6.0)
 
 Use a stable HTTPS endpoint with the current build. The plugin version and MCP
-server version must both be `0.5.1`. Updating the installed skills alone does not
+server version must both be `0.6.0`. Updating the installed skills alone does not
 update the remote server.
 
 Run `npm run typecheck`, `npm test`, and `npm run package:plugin` before release.
