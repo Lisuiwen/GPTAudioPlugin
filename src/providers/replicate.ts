@@ -12,6 +12,14 @@ import type {
 
 const DEFAULT_MODEL =
   process.env.REPLICATE_MODEL?.trim() ||
+  "fishaudio/ace-step-1.5";
+
+const DEFAULT_COVER_MODEL =
+  process.env.REPLICATE_COVER_MODEL?.trim() ||
+  "minimax/music-cover";
+
+const DEFAULT_CONTINUATION_MODEL =
+  process.env.REPLICATE_CONTINUATION_MODEL?.trim() ||
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
 const DEFAULT_ANALYSIS_MODEL =
@@ -36,6 +44,7 @@ type ModelSchema = {
 
 const PROMPT_CANDIDATES = [
   "prompt",
+  "tags",
   "text",
   "description",
   "caption",
@@ -46,6 +55,9 @@ const AUDIO_CANDIDATES = [
   "input_audio",
   "audio",
   "audio_file",
+  "audio_url",
+  "music_input",
+  "audio_chords",
   "reference_audio",
   "reference_audio_file",
   "melody",
@@ -275,6 +287,212 @@ function composePrompt(
   ].join("\n");
 }
 
+type ResolvedGenerationRoute = {
+  model: string;
+  generationMode: GenerateMusicResult["generationMode"];
+};
+
+function requireReferenceAudio(
+  request: GenerateMusicInput,
+  mode: string
+): string {
+  if (!request.referenceAudioUrl) {
+    throw new Error(`${mode} mode requires a reference audio attachment.`);
+  }
+  return request.referenceAudioUrl;
+}
+
+export function selectReplicateGenerationRoute(
+  request: GenerateMusicInput
+): ResolvedGenerationRoute {
+  const requestedMode = request.generationMode || "auto";
+  const explicitModel = request.model?.trim();
+
+  if (explicitModel) {
+    return {
+      model: explicitModel,
+      generationMode:
+        requestedMode === "auto" ? "custom" : requestedMode,
+    };
+  }
+
+  if (requestedMode === "cover") {
+    requireReferenceAudio(request, "cover");
+    return { model: DEFAULT_COVER_MODEL, generationMode: "cover" };
+  }
+
+  if (requestedMode === "reference") {
+    requireReferenceAudio(request, "reference");
+    return {
+      model: DEFAULT_CONTINUATION_MODEL,
+      generationMode: "reference",
+    };
+  }
+
+  if (requestedMode === "continue") {
+    requireReferenceAudio(request, "continue");
+    return {
+      model: DEFAULT_CONTINUATION_MODEL,
+      generationMode: "continue",
+    };
+  }
+
+  if (requestedMode === "generate") {
+    return { model: DEFAULT_MODEL, generationMode: "generate" };
+  }
+
+  if (request.referenceAudioUrl) {
+    if (request.continuation) {
+      return {
+        model: DEFAULT_CONTINUATION_MODEL,
+        generationMode: "continue",
+      };
+    }
+
+    if (request.instrumental === false) {
+      return { model: DEFAULT_COVER_MODEL, generationMode: "cover" };
+    }
+
+    return {
+      model: DEFAULT_CONTINUATION_MODEL,
+      generationMode: "reference",
+    };
+  }
+
+  return { model: DEFAULT_MODEL, generationMode: "generate" };
+}
+
+function clampText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  return trimmed.length <= maxLength
+    ? trimmed
+    : trimmed.slice(0, maxLength);
+}
+
+async function buildGenerationInput(
+  request: GenerateMusicInput,
+  model: string,
+  capabilities: ModelCapabilities,
+  finalPrompt: string,
+  generationMode: GenerateMusicResult["generationMode"]
+): Promise<Record<string, unknown>> {
+  if (model.startsWith("fishaudio/ace-step-1.5")) {
+    const instrumental = request.instrumental !== false;
+    if (!instrumental && !request.lyrics?.trim()) {
+      throw new Error(
+        "ACE-Step vocal generation requires lyrics. Provide lyrics or set instrumental=true."
+      );
+    }
+
+    return {
+      prompt: clampText(finalPrompt, 512),
+      lyrics: instrumental
+        ? "[Instrumental]"
+        : clampText(request.lyrics || "", 4096),
+      duration: Math.max(1, Math.min(600, request.duration)),
+    };
+  }
+
+  if (model.startsWith("minimax/music-2.6")) {
+    const instrumental = request.instrumental !== false;
+    const input: Record<string, unknown> = {
+      prompt: clampText(finalPrompt, 2000),
+      is_instrumental: instrumental,
+      audio_format: "mp3",
+    };
+
+    if (!instrumental) {
+      if (request.lyrics?.trim()) {
+        input.lyrics = clampText(request.lyrics, 3500);
+      } else {
+        input.lyrics_optimizer = request.autoLyrics !== false;
+      }
+    }
+
+    return input;
+  }
+
+  if (model.startsWith("minimax/music-cover")) {
+    const audioUrl = requireReferenceAudio(request, "cover");
+    const input: Record<string, unknown> = {
+      prompt: clampText(finalPrompt, 2000),
+      audio_url: audioUrl,
+      audio_format: "mp3",
+    };
+
+    if (request.lyrics?.trim()) {
+      input.lyrics = clampText(request.lyrics, 3000);
+    }
+
+    return input;
+  }
+
+  if (!capabilities.promptField) {
+    throw new Error(
+      `Model ${model} does not expose a recognizable text prompt input.`
+    );
+  }
+
+  if (capabilities.unsupportedRequiredFields.length) {
+    throw new Error(
+      `Model ${model} requires additional inputs that GPTAudioPlugin does not map yet: ${capabilities.unsupportedRequiredFields.join(
+        ", "
+      )}.`
+    );
+  }
+
+  if (request.referenceAudioUrl && !capabilities.audioField) {
+    throw new Error(
+      `Model ${model} does not accept a recognizable audio input. Remove the reference audio or choose an audio-conditioned model.`
+    );
+  }
+
+  const input: Record<string, unknown> = {
+    [capabilities.promptField]: finalPrompt,
+  };
+
+  if (capabilities.durationField) {
+    input[capabilities.durationField] = model.startsWith("meta/musicgen")
+      ? Math.min(30, request.duration)
+      : request.duration;
+  }
+
+  if (capabilities.outputFormatField) {
+    input[capabilities.outputFormatField] = "mp3";
+  }
+
+  if (capabilities.continuationField && request.referenceAudioUrl) {
+    input[capabilities.continuationField] =
+      generationMode === "continue" || Boolean(request.continuation);
+  }
+
+  if (
+    model.startsWith("meta/musicgen") &&
+    capabilities.inputFields.includes("model_version")
+  ) {
+    input.model_version = request.referenceAudioUrl
+      ? "stereo-melody-large"
+      : "stereo-large";
+  }
+
+  if (
+    model.startsWith("meta/musicgen") &&
+    capabilities.inputFields.includes("normalization_strategy")
+  ) {
+    input.normalization_strategy = "peak";
+  }
+
+  if (request.referenceAudioUrl && capabilities.audioField) {
+    input[capabilities.audioField] = await downloadReferenceAudio(
+      request.referenceAudioUrl,
+      request.referenceAudioName,
+      request.referenceAudioMimeType
+    );
+  }
+
+  return input;
+}
+
 async function downloadReferenceAudio(
   url: string,
   fileName = "reference-audio",
@@ -401,73 +619,22 @@ async function generate(
   credential: string,
   request: GenerateMusicInput
 ): Promise<GenerateMusicResult> {
-  const model = request.model?.trim() || DEFAULT_MODEL;
+  const route = selectReplicateGenerationRoute(request);
+  const model = route.model;
   const capabilities = await inspectModel(credential, model);
-
-  if (!capabilities.promptField) {
-    throw new Error(
-      `Model ${model} does not expose a recognizable text prompt input.`
-    );
-  }
-
-  if (capabilities.unsupportedRequiredFields.length) {
-    throw new Error(
-      `Model ${model} requires additional inputs that GPTAudioPlugin does not map yet: ${capabilities.unsupportedRequiredFields.join(
-        ", "
-      )}.`
-    );
-  }
-
-  if (request.referenceAudioUrl && !capabilities.audioField) {
-    throw new Error(
-      `Model ${model} does not accept a recognizable audio input. Remove the reference audio or choose an audio-conditioned model.`
-    );
-  }
 
   const finalPrompt = composePrompt(
     request.conversationSummary,
     request.directorPrompt
   );
 
-  const input: Record<string, unknown> = {
-    [capabilities.promptField]: finalPrompt,
-  };
-
-  if (capabilities.durationField) {
-    input[capabilities.durationField] = request.duration;
-  }
-
-  if (capabilities.outputFormatField) {
-    input[capabilities.outputFormatField] = "mp3";
-  }
-
-  if (capabilities.continuationField && request.referenceAudioUrl) {
-    input[capabilities.continuationField] = Boolean(request.continuation);
-  }
-
-  if (
-    model.startsWith("meta/musicgen") &&
-    capabilities.inputFields.includes("model_version")
-  ) {
-    input.model_version = request.referenceAudioUrl
-      ? "stereo-melody-large"
-      : "stereo-large";
-  }
-
-  if (
-    model.startsWith("meta/musicgen") &&
-    capabilities.inputFields.includes("normalization_strategy")
-  ) {
-    input.normalization_strategy = "peak";
-  }
-
-  if (request.referenceAudioUrl && capabilities.audioField) {
-    input[capabilities.audioField] = await downloadReferenceAudio(
-      request.referenceAudioUrl,
-      request.referenceAudioName,
-      request.referenceAudioMimeType
-    );
-  }
+  const input = await buildGenerationInput(
+    request,
+    model,
+    capabilities,
+    finalPrompt,
+    route.generationMode
+  );
 
   const replicate = new Replicate({
     auth: credential,
@@ -488,6 +655,7 @@ async function generate(
     provider: "replicate",
     audioUrl,
     model,
+    generationMode: route.generationMode,
     prompt: finalPrompt,
     capabilities,
   };
