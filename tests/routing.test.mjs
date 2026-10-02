@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 process.env.REPLICATE_MODEL = "";
 process.env.REPLICATE_COVER_MODEL = "";
+process.env.REPLICATE_VOCAL_MODEL = "";
 process.env.REPLICATE_CONTINUATION_MODEL = "";
 
 const { selectReplicateGenerationRoute } = await import("../dist/providers/replicate.js");
@@ -23,6 +24,21 @@ test("new music routes to ACE-Step", () => {
     model: "fishaudio/ace-step-1.5",
     generationMode: "generate",
   });
+});
+
+
+test("new vocal music routes to MiniMax Music 2.6", () => {
+  assert.deepEqual(
+    selectReplicateGenerationRoute(
+      request({
+        instrumental: false,
+      })
+    ),
+    {
+      model: "minimax/music-2.6",
+      generationMode: "generate",
+    }
+  );
 });
 
 test("vocal reference routes to MiniMax Music Cover", () => {
