@@ -14,6 +14,7 @@ import {
   type AuthSession,
 } from "./auth.js";
 import {
+  DEFAULT_ANALYSIS_MODEL,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_ID,
   getMusicProvider,
@@ -95,6 +96,48 @@ const generationOutputSchema = {
   error: z.string().optional(),
 };
 
+const analyzeInputSchema = {
+  provider: providerSchema,
+  model: z
+    .string()
+    .optional()
+    .describe(
+      "Replicate multimodal audio-understanding model. Omit to use the default analysis model."
+    ),
+  audio: OpenAIFileSchema.describe(
+    "The user's music/audio attachment from the current ChatGPT conversation."
+  ),
+  question: z
+    .string()
+    .min(1)
+    .describe(
+      "The user's concrete question about what is heard in the attached audio."
+    ),
+  conversationSummary: z
+    .string()
+    .optional()
+    .describe(
+      "Optional relevant context from the current ChatGPT conversation, such as creative intent or earlier feedback."
+    ),
+  analysisFocus: z
+    .array(z.string().min(1))
+    .max(12)
+    .optional()
+    .describe(
+      "Optional analysis dimensions to emphasize, for example instrumentation, arrangement, structure, melody, harmony, rhythm, mood, production, or performance."
+    ),
+};
+
+const analysisOutputSchema = {
+  status: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  answer: z.string().optional(),
+  prompt: z.string().optional(),
+  audioInputField: z.string().optional(),
+  error: z.string().optional(),
+};
+
 function authRequired(baseUrl: string) {
   return {
     content: [
@@ -121,7 +164,7 @@ function createMusicServer(
     },
     {
       instructions:
-        "This is a UI-less music generation MCP for ChatGPT. Reuse the current ChatGPT conversation as the reasoning layer. If the user attached an audio file in ChatGPT, pass that native attachment directly to generate_music.referenceAudio. Compose conversationSummary and directorPrompt from the current chat. Do not ask the user to upload the same file again and do not call a separate text-model API. Replicate is the only enabled provider in v0.4; provider plumbing is isolated so more providers can be added later.",
+        "This is a UI-less music generation and music-listening MCP for ChatGPT. Use generate_music when the user wants new music. Use analyze_music when the user wants you to listen to an attached audio file and critique, explain, compare, or answer questions about what is heard. Reuse relevant context from the current ChatGPT conversation. Pass native ChatGPT audio attachments directly to the tool; never ask the user to upload the same file again. Replicate is the enabled provider for both generation and multimodal audio understanding.",
     }
   );
 
@@ -320,6 +363,81 @@ function createMusicServer(
     }
   );
 
+
+  server.registerTool(
+    "analyze_music",
+    {
+      title: "Listen to and analyze music",
+      description:
+        "Send an attached audio file to a multimodal audio-language model on Replicate and return grounded music/audio analysis. Use this for critique, arrangement feedback, instrumentation questions, structural observations, mood, production, and other questions that require actually listening to the audio.",
+      inputSchema: analyzeInputSchema,
+      outputSchema: analysisOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+      _meta: {
+        securitySchemes: OAUTH_SECURITY,
+        "openai/fileParams": ["audio"],
+        "openai/toolInvocation/invoking": "Listening to the attached audio…",
+        "openai/toolInvocation/invoked": "Audio analysis finished.",
+      },
+    },
+    async (args) => {
+      if (!authSession) return authRequired(baseUrl);
+
+      try {
+        const provider = getMusicProvider(args.provider);
+        const result = await provider.analyze(authSession.replicateToken, {
+          model: args.model,
+          audioUrl: args.audio.download_url,
+          audioName: args.audio.file_name,
+          audioMimeType: args.audio.mime_type,
+          question: args.question,
+          conversationSummary: args.conversationSummary,
+          analysisFocus: args.analysisFocus,
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: result.answer,
+            },
+          ],
+          structuredContent: {
+            status: "succeeded",
+            provider: result.provider,
+            model: result.model,
+            answer: result.answer,
+            prompt: result.prompt,
+            audioInputField: result.capabilities.audioField,
+          },
+        };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown analysis error.";
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Music analysis failed: ${message}`,
+            },
+          ],
+          structuredContent: {
+            status: "failed",
+            provider: args.provider,
+            model: args.model || DEFAULT_ANALYSIS_MODEL,
+            error: message,
+          },
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -366,6 +484,7 @@ const httpServer = createServer(async (req, res) => {
           providers: [DEFAULT_PROVIDER_ID],
           defaultProvider: DEFAULT_PROVIDER_ID,
           defaultModel: DEFAULT_MODEL,
+          defaultAnalysisModel: DEFAULT_ANALYSIS_MODEL,
           oauth: {
             resourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
             authorizationServer: baseUrl,

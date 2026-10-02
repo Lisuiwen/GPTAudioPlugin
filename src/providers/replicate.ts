@@ -2,6 +2,8 @@ import { File } from "node:buffer";
 import Replicate from "replicate";
 
 import type {
+  AnalyzeMusicInput,
+  AnalyzeMusicResult,
   GenerateMusicInput,
   GenerateMusicResult,
   ModelCapabilities,
@@ -11,6 +13,10 @@ import type {
 const DEFAULT_MODEL =
   process.env.REPLICATE_MODEL?.trim() ||
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
+
+const DEFAULT_ANALYSIS_MODEL =
+  process.env.REPLICATE_ANALYSIS_MODEL?.trim() ||
+  "lucataco/qwen2.5-omni-7b";
 
 type SchemaProperty = {
   type?: string | string[];
@@ -270,6 +276,64 @@ async function downloadReferenceAudio(
   });
 }
 
+function extractText(output: unknown): string | undefined {
+  if (!output) return undefined;
+
+  if (typeof output === "string") {
+    return output.trim() || undefined;
+  }
+
+  if (Array.isArray(output)) {
+    const parts = output
+      .map((item) => extractText(item))
+      .filter(Boolean) as string[];
+    return parts.length ? parts.join("\n").trim() : undefined;
+  }
+
+  if (typeof output === "object") {
+    const value = output as {
+      text?: unknown;
+      output?: unknown;
+      response?: unknown;
+      answer?: unknown;
+      message?: unknown;
+    };
+
+    for (const candidate of [
+      value.text,
+      value.answer,
+      value.response,
+      value.message,
+      value.output,
+    ]) {
+      const text = extractText(candidate);
+      if (text) return text;
+    }
+  }
+
+  return undefined;
+}
+
+function composeAnalysisPrompt(request: AnalyzeMusicInput): string {
+  const focus = request.analysisFocus?.length
+    ? `Focus especially on: ${request.analysisFocus.join(", ")}.`
+    : "Consider melody, harmony, rhythm, instrumentation, arrangement, structure, production, mood, and performance where relevant.";
+
+  return [
+    "You are listening to the attached music/audio directly.",
+    "Answer the user's question using evidence from what you actually hear.",
+    "Do not invent exact BPM, key, chords, instruments, timestamps, or production details when uncertain.",
+    "When useful, distinguish confident observations from tentative interpretations.",
+    focus,
+    request.conversationSummary?.trim()
+      ? `Relevant conversation context: ${request.conversationSummary.trim()}`
+      : "",
+    `User question: ${request.question.trim()}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function extractUrl(output: unknown): string | undefined {
   if (!output) return undefined;
 
@@ -406,9 +470,69 @@ async function generate(
   };
 }
 
+
+async function analyze(
+  credential: string,
+  request: AnalyzeMusicInput
+): Promise<AnalyzeMusicResult> {
+  const model = request.model?.trim() || DEFAULT_ANALYSIS_MODEL;
+  const capabilities = await inspectModel(credential, model);
+
+  if (!capabilities.promptField) {
+    throw new Error(
+      `Analysis model ${model} does not expose a recognizable text prompt input.`
+    );
+  }
+
+  if (!capabilities.audioField) {
+    throw new Error(
+      `Analysis model ${model} does not expose a recognizable audio input.`
+    );
+  }
+
+  const finalPrompt = composeAnalysisPrompt(request);
+  const input: Record<string, unknown> = {
+    [capabilities.promptField]: finalPrompt,
+    [capabilities.audioField]: await downloadReferenceAudio(
+      request.audioUrl,
+      request.audioName,
+      request.audioMimeType
+    ),
+  };
+
+  if (capabilities.inputFields.includes("generate_audio")) {
+    input.generate_audio = false;
+  }
+
+  if (capabilities.inputFields.includes("system_prompt")) {
+    input.system_prompt =
+      "You are a careful music and audio critic. Listen to the provided audio directly and answer the user's question with grounded, concise observations. State uncertainty instead of guessing.";
+  }
+
+  const replicate = new Replicate({ auth: credential });
+  const output = await replicate.run(model as never, { input });
+  const answer = extractText(output);
+
+  if (!answer) {
+    throw new Error(
+      "Replicate analysis completed without returning recognizable text."
+    );
+  }
+
+  return {
+    provider: "replicate",
+    model,
+    prompt: finalPrompt,
+    answer,
+    capabilities,
+  };
+}
+
 export const replicateProvider: MusicProvider = {
   id: "replicate",
   defaultModel: DEFAULT_MODEL,
+  defaultAnalysisModel: DEFAULT_ANALYSIS_MODEL,
   inspectModel,
   generate,
+  analyze,
 };
