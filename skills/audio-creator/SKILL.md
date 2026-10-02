@@ -23,7 +23,8 @@ Use this workflow when the user wants to create, iterate on, continue, cover, re
 7. Pass `lyrics` when the user supplied or requested specific lyrics. For vocal generation without explicit lyrics, leave `autoLyrics=true` when supported.
 8. Preserve relevant constraints: scene/story, intended use, mood, energy, genre references, tempo, key, instruments, sound design, structure, duration, looping, vocals, and continuation intent.
 9. The MCP uses one provider only: the user's Replicate account. In `auto` mode the current routing is:
-   - new music → `fishaudio/ace-step-1.5`
+   - new instrumental/BGM → `fishaudio/ace-step-1.5`
+   - new vocal song → `minimax/music-2.6`
    - vocal reference cover/remix → `minimax/music-cover`
    - melody reference or continuation → `meta/musicgen`
 10. If the user explicitly chooses another Replicate model, pass `model`; it overrides automatic routing. Use `inspect_music_model` when useful before generation.
