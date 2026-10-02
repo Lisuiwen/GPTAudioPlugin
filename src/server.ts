@@ -411,9 +411,9 @@ const httpServer = createServer(async (req, res) => {
   res.writeHead(404).end("Not Found");
 });
 
-httpServer.listen(port, "127.0.0.1", () => {
+httpServer.listen(port, "0.0.0.0", () => {
   console.log(
-    `GPTAudioMCP listening on http://127.0.0.1:${port}${MCP_PATH}`
+    `GPTAudioMCP listening on 0.0.0.0:${port}${MCP_PATH}`
   );
   console.log("UI: disabled; use native ChatGPT attachments");
   console.log(`Provider: ${DEFAULT_PROVIDER_ID}`);
