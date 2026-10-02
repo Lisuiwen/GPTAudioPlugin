@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Generate music and analyze attached audio through GPTAudioMCP.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"

@@ -9,6 +9,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -45,6 +47,7 @@ type Store = {
   profiles: Record<string, ProfileRecord>;
   accessTokens: Record<string, TokenRecord>;
   refreshTokens: Record<string, TokenRecord>;
+  authorizationCodes: Record<string, AuthorizationCodeRecord>;
 };
 
 type AuthorizationCodeRecord = {
@@ -65,10 +68,9 @@ export type AuthSession = {
   scope: string[];
 };
 
-const dataDir = resolve(process.cwd(), ".data");
+const dataDir = resolve(process.env.AUTH_DATA_DIR?.trim() || ".data");
 const storePath = resolve(dataDir, "auth-store.json");
 const keyPath = resolve(dataDir, "auth.key");
-const authorizationCodes = new Map<string, AuthorizationCodeRecord>();
 
 function ensureDataDir(): void {
   mkdirSync(dataDir, { recursive: true });
@@ -82,23 +84,31 @@ function readStore(): Store {
       profiles: {},
       accessTokens: {},
       refreshTokens: {},
+      authorizationCodes: {},
     };
   }
 
-  try {
-    return JSON.parse(readFileSync(storePath, "utf8")) as Store;
-  } catch {
-    return {
-      profiles: {},
-      accessTokens: {},
-      refreshTokens: {},
-    };
+  const store = JSON.parse(readFileSync(storePath, "utf8")) as Store;
+  if (!store.profiles || !store.accessTokens || !store.refreshTokens) {
+    throw new Error("Invalid auth store. Restore the existing store from backup.");
   }
+  store.authorizationCodes ??= {};
+  return store;
 }
 
 function writeStore(store: Store): void {
   ensureDataDir();
-  writeFileSync(storePath, JSON.stringify(store, null, 2), "utf8");
+  const temporaryPath = `${storePath}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporaryPath, JSON.stringify(store, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    renameSync(temporaryPath, storePath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 function getEncryptionKey(): Buffer {
@@ -115,11 +125,18 @@ function getEncryptionKey(): Buffer {
 
   if (existsSync(keyPath)) {
     const decoded = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
-    if (decoded.length === 32) return decoded;
+    if (decoded.length !== 32) {
+      throw new Error("Stored auth encryption key is invalid. Restore it from backup.");
+    }
+    return decoded;
   }
 
   const key = randomBytes(32);
-  writeFileSync(keyPath, key.toString("base64"), "utf8");
+  writeFileSync(keyPath, key.toString("base64"), {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
   return key;
 }
 
@@ -189,8 +206,8 @@ function pruneStore(store: Store): void {
     if (record.expiresAt <= now) delete store.refreshTokens[key];
   }
 
-  for (const [code, record] of authorizationCodes.entries()) {
-    if (record.expiresAt <= now) authorizationCodes.delete(code);
+  for (const [code, record] of Object.entries(store.authorizationCodes)) {
+    if (record.expiresAt <= now) delete store.authorizationCodes[code];
   }
 }
 
@@ -289,13 +306,13 @@ function upsertProfile(
 
 function issueTokens(
   profileId: string,
-  scope: string
+  scope: string,
+  store: Store = readStore()
 ): {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
 } {
-  const store = readStore();
   pruneStore(store);
 
   const accessToken = createOpaqueToken("gpa");
@@ -567,7 +584,9 @@ export async function handleAuthHttp(
       const profile = upsertProfile(replicateToken, account);
       const code = createOpaqueToken("gpc");
 
-      authorizationCodes.set(code, {
+      const store = readStore();
+      pruneStore(store);
+      store.authorizationCodes[tokenHash(code)] = {
         clientId,
         redirectUri,
         codeChallenge,
@@ -575,7 +594,8 @@ export async function handleAuthHttp(
         scope,
         profileId: profile.id,
         expiresAt: Date.now() + AUTH_CODE_TTL_MS,
-      });
+      };
+      writeStore(store);
 
       const callback = new URL(redirectUri);
       callback.searchParams.set("code", code);
@@ -606,7 +626,9 @@ export async function handleAuthHttp(
       const codeVerifier = form.get("code_verifier") || "";
       const redirectUri = form.get("redirect_uri") || "";
       const clientId = form.get("client_id") || "";
-      const record = authorizationCodes.get(code);
+      const store = readStore();
+      pruneStore(store);
+      const record = store.authorizationCodes[tokenHash(code)];
 
       if (
         !record ||
@@ -622,8 +644,8 @@ export async function handleAuthHttp(
         return true;
       }
 
-      authorizationCodes.delete(code);
-      const tokens = issueTokens(record.profileId, record.scope);
+      delete store.authorizationCodes[tokenHash(code)];
+      const tokens = issueTokens(record.profileId, record.scope, store);
 
       json(res, 200, {
         access_token: tokens.accessToken,
@@ -651,9 +673,7 @@ export async function handleAuthHttp(
       }
 
       delete store.refreshTokens[tokenHash(refreshToken)];
-      writeStore(store);
-
-      const tokens = issueTokens(record.profileId, record.scope);
+      const tokens = issueTokens(record.profileId, record.scope, store);
       json(res, 200, {
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,

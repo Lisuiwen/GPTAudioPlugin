@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -21,7 +21,7 @@ import {
 } from "./providers/index.js";
 
 const MCP_PATH = "/mcp";
-const SERVER_VERSION = "0.5.0";
+const SERVER_VERSION = "0.5.1";
 const OAUTH_SCOPES = ["replicate.read", "replicate.run"];
 const OAUTH_SECURITY = [{ type: "oauth2" as const, scopes: OAUTH_SCOPES }];
 
@@ -195,7 +195,7 @@ function createMusicServer(
       },
     },
     async (args) => {
-      if (!authSession) return authRequired(baseUrl);
+      if (!authSession?.scope.includes("replicate.read")) return authRequired(baseUrl);
 
       return {
         content: [
@@ -242,7 +242,7 @@ function createMusicServer(
       },
     },
     async (args) => {
-      if (!authSession) return authRequired(baseUrl);
+      if (!authSession?.scope.includes("replicate.read")) return authRequired(baseUrl);
 
       try {
         const provider = getMusicProvider(args.provider);
@@ -304,7 +304,7 @@ function createMusicServer(
       },
     },
     async (args) => {
-      if (!authSession) return authRequired(baseUrl);
+      if (!authSession?.scope.includes("replicate.run")) return authRequired(baseUrl);
 
       try {
         const provider = getMusicProvider(args.provider);
@@ -386,7 +386,7 @@ function createMusicServer(
       },
     },
     async (args) => {
-      if (!authSession) return authRequired(baseUrl);
+      if (!authSession?.scope.includes("replicate.run")) return authRequired(baseUrl);
 
       try {
         const provider = getMusicProvider(args.provider);
@@ -445,7 +445,19 @@ function createMusicServer(
 const port = Number(process.env.PORT ?? 8787);
 const baseUrl = getPublicBaseUrl(port);
 
-const httpServer = createServer(async (req, res) => {
+const httpServer = createServer((req, res) => {
+  handleRequest(req, res).catch(() => {
+    console.error("Request failed. Check OAuth storage configuration and permissions.");
+    if (!res.headersSent) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "server_error" }));
+    } else {
+      res.end();
+    }
+  });
+});
+
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!req.url) {
     res.writeHead(400).end("Missing URL");
     return;
@@ -465,8 +477,8 @@ const httpServer = createServer(async (req, res) => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
       "Access-Control-Allow-Headers":
-        "authorization, content-type, mcp-session-id",
-      "Access-Control-Expose-Headers": "Mcp-Session-Id",
+        "authorization, content-type, mcp-session-id, mcp-protocol-version",
+      "Access-Control-Expose-Headers": "Mcp-Session-Id, WWW-Authenticate",
     });
     res.end();
     return;
@@ -502,9 +514,20 @@ const httpServer = createServer(async (req, res) => {
     allowedMethods.has(req.method)
   ) {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate");
 
     const authSession = authenticateRequest(req);
+    if (req.headers.authorization && !authSession) {
+      res.writeHead(401, {
+        "WWW-Authenticate": oauthChallenge(baseUrl).replace(
+          'error="insufficient_scope"',
+          'error="invalid_token"'
+        ),
+        "content-type": "application/json",
+      });
+      res.end(JSON.stringify({ error: "invalid_token", error_description: "Reconnect your Replicate account." }));
+      return;
+    }
     const server = createMusicServer(authSession, baseUrl);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -529,13 +552,18 @@ const httpServer = createServer(async (req, res) => {
   }
 
   res.writeHead(404).end("Not Found");
-});
+}
 
 httpServer.listen(port, "0.0.0.0", () => {
+  const address = httpServer.address();
+  const listeningPort = typeof address === "object" && address ? address.port : port;
   console.log(
-    `GPTAudioMCP listening on 0.0.0.0:${port}${MCP_PATH}`
+    `GPTAudioMCP listening on 0.0.0.0:${listeningPort}${MCP_PATH}`
   );
   console.log("UI: disabled; use native ChatGPT attachments");
   console.log(`Provider: ${DEFAULT_PROVIDER_ID}`);
   console.log(`OAuth issuer: ${baseUrl}`);
+  if (process.env.RENDER && !process.env.AUTH_DATA_DIR) {
+    console.warn("AUTH_DATA_DIR is not configured. Mount persistent storage before relying on OAuth across Render restarts.");
+  }
 });

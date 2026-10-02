@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "check:mcp": "node scripts/check-mcp.mjs",
     "inspect": "npx @modelcontextprotocol/inspector@latest",
     "package:plugin": "powershell -ExecutionPolicy Bypass -File scripts/package-plugin.ps1"
   },

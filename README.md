@@ -173,6 +173,50 @@ MCP endpoint:
 http://127.0.0.1:8787/mcp
 ```
 
+## Deployment and OAuth recovery (v0.5.1)
+
+Use a stable HTTPS endpoint with the current build. The plugin version and MCP
+server version must both be `0.5.1`. Updating the installed skills alone does not
+update the remote server.
+
+Run `npm run typecheck`, `npm test`, and `npm run package:plugin` before release.
+After deploying, run `npm run check:mcp`. This verifies the deployed version,
+all four tools, and the unauthenticated OAuth challenge without generating or
+analyzing music. Pass another endpoint with `npm run check:mcp -- <mcp-url>`.
+
+OAuth profiles, access tokens, refresh tokens, authorization codes, and the
+encryption key must survive restarts. Set `AUTH_DATA_DIR` to an absolute path on
+persistent storage, for example `/var/data/gpt-audio`. Preserve both
+`auth-store.json` and `auth.key`. Alternatively keep the same 32-byte base64
+`AUTH_ENCRYPTION_KEY` across deployments, while still persisting the store.
+Writes to the store are atomic; malformed existing stores are preserved for
+recovery instead of being silently replaced with an empty store.
+
+The supplied `render.yaml` describes one paid compute instance and a 1 GB disk.
+For an existing standalone Render service, change that service's compute plan,
+attach the disk at `/var/data/gpt-audio`, set `AUTH_DATA_DIR` to the same path,
+and set `PUBLIC_BASE_URL` to its public HTTPS origin. Do not create a duplicate
+service to apply these settings. For a new service, review the Blueprint's cost
+before applying it. Render Free instances cannot attach disks and lose local
+files when they spin down, restart, or redeploy; Free is only suitable for a
+temporary smoke test of this file-backed OAuth implementation.
+
+If a client reports `invalid_grant`, the old refresh token cannot be recovered
+after the server has lost its store. After configuring persistent storage and
+deploying, reconnect Replicate through the plugin's authorization page. In
+Codex, use:
+
+```powershell
+codex plugin marketplace upgrade gpt-audio-local
+codex plugin add gpt-audio-plugin@gpt-audio-local
+codex mcp logout gpt-audio
+codex mcp login gpt-audio
+```
+
+Restart the desktop app after the plugin update if the current session retains
+the old tool catalog. In ChatGPT, reconnect the plugin's account connection.
+Never paste the Replicate API token into chat.
+
 ## Project structure
 
 ```text
