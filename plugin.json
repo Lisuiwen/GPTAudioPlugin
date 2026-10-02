@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.5.1",
-  "description": "Generate music and listen to attached audio for grounded music analysis through GPTAudioMCP.",
+  "version": "0.6.0",
+  "description": "Generate, transform, and analyze music through Replicate with task-based model routing.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -19,8 +19,8 @@
     "com.openai": {
       "interface": {
         "displayName": "GPT Audio Plugin",
-        "shortDescription": "Generate music or analyze attached audio.",
-        "longDescription": "Stay in the normal ChatGPT conversation, attach audio when useful, and use GPTAudioMCP to either generate music or send the actual audio to a multimodal listening model for grounded critique and analysis through your connected Replicate account.",
+        "shortDescription": "Generate, transform, or analyze attached music.",
+        "longDescription": "Stay in the normal ChatGPT conversation and use GPTAudioMCP to generate new music, transform reference audio, continue a musical idea, or listen to attached audio for grounded critique. Replicate remains the single provider while the MCP routes each task to a suitable model.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [
@@ -29,9 +29,10 @@
         ],
         "websiteURL": "https://github.com/Lisuiwen/GPTAudioPlugin",
         "defaultPrompt": [
-          "Generate music from our current conversation.",
-          "Listen to the audio file I attached and critique the arrangement, instrumentation, structure, mood, and production.",
-          "Use the audio file I attached and our conversation as the creative direction."
+          "Generate instrumental game music from our current conversation.",
+          "Use the audio file I attached as a reference and transform it according to our discussion.",
+          "Continue the attached musical idea.",
+          "Listen to the audio file I attached and critique the arrangement, instrumentation, structure, mood, and production."
         ]
       }
     }
