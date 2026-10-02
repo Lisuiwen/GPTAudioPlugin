@@ -1,6 +1,6 @@
-# Applying this Blueprint provisions paid compute and a 1 GB persistent disk.
-# For the existing standalone service, apply the same settings in its dashboard
-# instead of creating a second service.
+# Free deployment for temporary testing. OAuth files are lost on sleep/restart.
+# For durable OAuth, upgrade this same service and attach persistent storage;
+# see README.md. Do not create a duplicate service for an existing deployment.
 services:
   - type: web
     name: gpt-audio-mcp-v2
@@ -8,20 +8,14 @@ services:
     repo: https://github.com/Lisuiwen/GPTAudioPlugin
     branch: main
     region: singapore
-    plan: 0.5c-512mb
+    plan: free
     numInstances: 1
     autoDeployTrigger: checksPass
     buildCommand: npm ci && npm run typecheck && npm test
     startCommand: npm start
     healthCheckPath: /
-    disk:
-      name: gpt-audio-auth
-      mountPath: /var/data/gpt-audio
-      sizeGB: 1
     envVars:
       - key: PUBLIC_BASE_URL
         value: https://gpt-audio-mcp-v2.onrender.com
-      - key: AUTH_DATA_DIR
-        value: /var/data/gpt-audio
       - key: REPLICATE_ANALYSIS_MODEL
         value: lucataco/qwen2.5-omni-7b

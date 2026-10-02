@@ -192,12 +192,12 @@ persistent storage, for example `/var/data/gpt-audio`. Preserve both
 Writes to the store are atomic; malformed existing stores are preserved for
 recovery instead of being silently replaced with an empty store.
 
-The supplied `render.yaml` describes one paid compute instance and a 1 GB disk.
+The supplied `render.yaml` uses a Free instance for temporary testing.
 For an existing standalone Render service, change that service's compute plan,
 attach the disk at `/var/data/gpt-audio`, set `AUTH_DATA_DIR` to the same path,
 and set `PUBLIC_BASE_URL` to its public HTTPS origin. Do not create a duplicate
-service to apply these settings. For a new service, review the Blueprint's cost
-before applying it. Render Free instances cannot attach disks and lose local
+service to apply these settings. A paid compute instance and a 1 GB disk are
+needed for this persistent setup. Render Free instances cannot attach disks and lose local
 files when they spin down, restart, or redeploy; Free is only suitable for a
 temporary smoke test of this file-backed OAuth implementation.
 
@@ -216,6 +216,10 @@ codex mcp login gpt-audio
 Restart the desktop app after the plugin update if the current session retains
 the old tool catalog. In ChatGPT, reconnect the plugin's account connection.
 Never paste the Replicate API token into chat.
+
+If Render reports a GitHub repository `404` during deploy, reconnect its GitHub
+integration and grant access to this private repository. A successful local
+Git push does not establish Render's permission to clone the repository.
 
 ## Project structure
 
