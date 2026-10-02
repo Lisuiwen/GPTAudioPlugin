@@ -21,7 +21,7 @@ import {
 } from "./providers/index.js";
 
 const MCP_PATH = "/mcp";
-const SERVER_VERSION = "0.5.1";
+const SERVER_VERSION = "0.6.0";
 const OAUTH_SCOPES = ["replicate.read", "replicate.run"];
 const OAUTH_SECURITY = [{ type: "oauth2" as const, scopes: OAUTH_SCOPES }];
 
@@ -60,7 +60,13 @@ const generateInputSchema = {
     .string()
     .optional()
     .describe(
-      'Provider model identifier. For Replicate use "owner/name" or "owner/name:version". Omit to use the default model.'
+      'Provider model identifier. For Replicate use "owner/name" or "owner/name:version". When supplied, it overrides automatic model routing.'
+    ),
+  generationMode: z
+    .enum(["auto", "generate", "cover", "reference", "continue"])
+    .default("auto")
+    .describe(
+      "Generation intent. auto routes new music to ACE-Step, vocal reference transformations to MiniMax Music Cover, and melody-reference/continuation tasks to MusicGen."
     ),
   conversationSummary: z
     .string()
@@ -74,7 +80,26 @@ const generateInputSchema = {
     .describe(
       "Production-ready music direction composed by ChatGPT from the current conversation and user request."
     ),
-  duration: z.number().int().min(1).max(30).default(8),
+  duration: z.number().int().min(1).max(600).default(8),
+  lyrics: z
+    .string()
+    .max(4096)
+    .optional()
+    .describe(
+      "Optional lyrics for vocal generation or to replace lyrics in cover mode."
+    ),
+  instrumental: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Generate instrumental music when true. Set false for vocal songs or vocal cover/remix workflows."
+    ),
+  autoLyrics: z
+    .boolean()
+    .default(true)
+    .describe(
+      "When supported by the selected model, generate lyrics automatically if a vocal song is requested without explicit lyrics."
+    ),
   referenceAudio: OpenAIFileSchema.optional().describe(
     "The user's audio attachment from the normal ChatGPT conversation. Pass it directly when the selected model supports reference audio."
   ),
@@ -91,6 +116,7 @@ const generationOutputSchema = {
   provider: z.string(),
   audioUrl: z.string().optional(),
   model: z.string(),
+  generationMode: z.string().optional(),
   prompt: z.string().optional(),
   referenceAudioUsed: z.boolean().optional(),
   audioInputField: z.string().optional(),
@@ -288,7 +314,7 @@ function createMusicServer(
     {
       title: "Generate music",
       description:
-        "Generate music from the current ChatGPT conversation and optional native ChatGPT audio attachment. The MCP automatically inspects the selected provider model, maps compatible inputs, and rejects reference audio when the model cannot consume it.",
+        "Generate or transform music through Replicate. In auto mode, new music uses ACE-Step 1.5, vocal reference transformations use MiniMax Music Cover, and melody-reference/continuation workflows use MusicGen. An explicit model overrides routing.",
       inputSchema: generateInputSchema,
       outputSchema: generationOutputSchema,
       annotations: {
@@ -310,9 +336,13 @@ function createMusicServer(
         const provider = getMusicProvider(args.provider);
         const result = await provider.generate(authSession.replicateToken, {
           model: args.model,
+          generationMode: args.generationMode,
           conversationSummary: args.conversationSummary,
           directorPrompt: args.directorPrompt,
           duration: args.duration ?? 8,
+          lyrics: args.lyrics,
+          instrumental: args.instrumental,
+          autoLyrics: args.autoLyrics,
           referenceAudioUrl: args.referenceAudio?.download_url,
           referenceAudioName: args.referenceAudio?.file_name,
           referenceAudioMimeType: args.referenceAudio?.mime_type,
@@ -326,8 +356,8 @@ function createMusicServer(
             {
               type: "text",
               text: referenceAudioUsed
-                ? `Generated music with ${result.provider} using the attached audio: ${result.audioUrl}`
-                : `Generated music with ${result.provider}: ${result.audioUrl}`,
+                ? `Generated music with ${result.provider} using ${result.model} in ${result.generationMode} mode and the attached audio: ${result.audioUrl}`
+                : `Generated music with ${result.provider} using ${result.model} in ${result.generationMode} mode: ${result.audioUrl}`,
             },
           ],
           structuredContent: {
@@ -335,6 +365,7 @@ function createMusicServer(
             provider: result.provider,
             audioUrl: result.audioUrl,
             model: result.model,
+            generationMode: result.generationMode,
             prompt: result.prompt,
             referenceAudioUsed,
             audioInputField: result.capabilities.audioField,
