@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Generate music from ChatGPT conversation context and optional native audio attachments through GPTAudioMCP.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"
