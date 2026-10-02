@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "gpt-audio": {
-      "type": "streamable-http",
+      "type": "http",
       "url": "https://gpt-audio-mcp-v2.onrender.com/mcp"
     }
   }
