@@ -117,7 +117,7 @@ function createMusicServer(
   const server = new McpServer(
     {
       name: "gpt-audio-mcp",
-      version: "0.4.0",
+      version: "0.4.1",
     },
     {
       instructions:
@@ -360,7 +360,7 @@ const httpServer = createServer(async (req, res) => {
         JSON.stringify({
           name: "GPTAudioMCP",
           status: "ok",
-          version: "0.4.0",
+          version: "0.4.1",
           ui: false,
           mcp: MCP_PATH,
           providers: [DEFAULT_PROVIDER_ID],
