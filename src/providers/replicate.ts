@@ -18,6 +18,8 @@ const DEFAULT_ANALYSIS_MODEL =
   process.env.REPLICATE_ANALYSIS_MODEL?.trim() ||
   "lucataco/qwen2.5-omni-7b";
 
+const latestModelVersions = new Map<string, string>();
+
 type SchemaProperty = {
   type?: string | string[];
   format?: string;
@@ -138,9 +140,14 @@ async function fetchModelSchema(
   const data = (await response.json()) as {
     openapi_schema?: unknown;
     latest_version?: {
+      id?: string;
       openapi_schema?: unknown;
     };
   };
+
+  if (!version && data.latest_version?.id) {
+    latestModelVersions.set(model, data.latest_version.id);
+  }
 
   const openapi = version
     ? data.openapi_schema
@@ -153,6 +160,20 @@ async function fetchModelSchema(
   }
 
   return schemaFromOpenApi(openapi);
+}
+
+function runnableModelReference(model: string): string {
+  const { owner, name, version } = splitModelReference(model);
+  if (version) return `${owner}/${name}:${version}`;
+
+  const latestVersion = latestModelVersions.get(model);
+  if (!latestVersion) {
+    throw new Error(
+      `Replicate model ${model} did not expose a runnable latest version.`
+    );
+  }
+
+  return `${owner}/${name}:${latestVersion}`;
 }
 
 function firstExisting(
@@ -452,7 +473,9 @@ async function generate(
     auth: credential,
   });
 
-  const output = await replicate.run(model as never, { input });
+  const output = await replicate.run(runnableModelReference(model) as never, {
+    input,
+  });
   const audioUrl = extractUrl(output);
 
   if (!audioUrl) {
@@ -510,7 +533,9 @@ async function analyze(
   }
 
   const replicate = new Replicate({ auth: credential });
-  const output = await replicate.run(model as never, { input });
+  const output = await replicate.run(runnableModelReference(model) as never, {
+    input,
+  });
   const answer = extractText(output);
 
   if (!answer) {

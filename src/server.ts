@@ -21,6 +21,7 @@ import {
 } from "./providers/index.js";
 
 const MCP_PATH = "/mcp";
+const SERVER_VERSION = "0.5.0";
 const OAUTH_SCOPES = ["replicate.read", "replicate.run"];
 const OAUTH_SECURITY = [{ type: "oauth2" as const, scopes: OAUTH_SCOPES }];
 
@@ -160,7 +161,7 @@ function createMusicServer(
   const server = new McpServer(
     {
       name: "gpt-audio-mcp",
-      version: "0.4.2",
+      version: SERVER_VERSION,
     },
     {
       instructions:
@@ -478,7 +479,7 @@ const httpServer = createServer(async (req, res) => {
         JSON.stringify({
           name: "GPTAudioMCP",
           status: "ok",
-          version: "0.4.2",
+          version: SERVER_VERSION,
           ui: false,
           mcp: MCP_PATH,
           providers: [DEFAULT_PROVIDER_ID],
