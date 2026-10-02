@@ -1,5 +1,7 @@
 export type MusicProviderId = "replicate";
 
+export type GenerationMode = "auto" | "generate" | "cover" | "reference" | "continue";
+
 export type ModelCapabilities = {
   provider: MusicProviderId;
   model: string;
@@ -17,9 +19,13 @@ export type ModelCapabilities = {
 
 export type GenerateMusicInput = {
   model?: string;
+  generationMode?: GenerationMode;
   conversationSummary: string;
   directorPrompt: string;
   duration: number;
+  lyrics?: string;
+  instrumental?: boolean;
+  autoLyrics?: boolean;
   referenceAudioUrl?: string;
   referenceAudioName?: string;
   referenceAudioMimeType?: string;
@@ -30,6 +36,7 @@ export type GenerateMusicResult = {
   provider: MusicProviderId;
   audioUrl: string;
   model: string;
+  generationMode: Exclude<GenerationMode, "auto"> | "custom";
   prompt: string;
   capabilities: ModelCapabilities;
 };
