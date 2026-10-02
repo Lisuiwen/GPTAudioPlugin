@@ -95,7 +95,8 @@ The file input uses ChatGPT's standard `openai/fileParams` contract.
 Default Replicate routing:
 
 ```text
-new music / BGM              -> fishaudio/ace-step-1.5
+new instrumental / BGM       -> fishaudio/ace-step-1.5
+new vocal song               -> minimax/music-2.6
 vocal reference cover/remix  -> minimax/music-cover
 melody reference             -> meta/musicgen (stereo-melody-large)
 continuation                 -> meta/musicgen (stereo-melody-large)
@@ -186,6 +187,7 @@ Defaults:
 ```env
 REPLICATE_MODEL=fishaudio/ace-step-1.5
 REPLICATE_COVER_MODEL=minimax/music-cover
+REPLICATE_VOCAL_MODEL=minimax/music-2.6
 REPLICATE_CONTINUATION_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
 REPLICATE_ANALYSIS_MODEL=lucataco/qwen2.5-omni-7b
 PORT=8787
