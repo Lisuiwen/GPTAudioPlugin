@@ -1,14 +1,20 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Generate music from the current ChatGPT conversation and optional native audio attachments through GPTAudioMCP.",
   "author": {
     "name": "Lisuiwen"
   },
   "repository": "https://github.com/Lisuiwen/GPTAudioPlugin",
   "license": "MIT",
-  "keywords": ["audio", "music", "replicate", "chatgpt", "mcp"],
+  "keywords": [
+    "audio",
+    "music",
+    "replicate",
+    "chatgpt",
+    "mcp"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
@@ -17,7 +23,10 @@
         "longDescription": "Stay in the normal ChatGPT conversation, optionally attach a recording with ChatGPT's native attachment control, and generate music through GPTAudioMCP using your connected provider account.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
-        "capabilities": ["Read", "Write"],
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
         "websiteURL": "https://github.com/Lisuiwen/GPTAudioPlugin",
         "defaultPrompt": [
           "Generate music from our current conversation.",
