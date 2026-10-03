@@ -57,7 +57,7 @@ try {
     report.analysisJobId = analyzed.jobId; report.analysisModel = analyzed.model; report.analysisModelVersion = analyzed.modelVersion;
     report.analyzedRange = analyzed.analyzedRange; report.structuredStatus = analyzed.structuredStatus; report.answer = analyzed.answer;
     assert.deepEqual(report.analyzedRange, { startSec: 0, endSec: 4 }); assert.ok(report.answer);
-    report.status = "passed"; report.completedAt = new Date().toISOString(); await save();
+    report.status = "passed"; delete report.error; report.completedAt = new Date().toISOString(); await save();
     console.log(JSON.stringify({ status: report.status, generationJobId: report.generationJobId, audioId: report.audioId, analysisJobId: report.analysisJobId, structuredStatus: report.structuredStatus, reportPath }));
   }
 } catch (error) {
