@@ -56,11 +56,11 @@ function mockProvider(t) {
   return calls;
 }
 
-test("Sites discovery uses four shared tools and protects calls without platform identity", async (t) => {
+test("Sites discovery exposes the full workflow toolset and protects calls without platform identity", async (t) => {
   const f = fixture(t);
   const init = await f.rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } });
   assert.equal(init.status, 200);
-  assert.equal((await init.json()).result.serverInfo.version, "0.7.0");
+  assert.equal((await init.json()).result.serverInfo.version, "0.7.1");
   const listed = await f.rpc("tools/list");
   const { result: { tools } } = await listed.json();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
