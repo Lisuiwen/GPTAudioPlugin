@@ -1,227 +1,142 @@
-# GPTAudioPlugin / GPTAudioMCP
+# GPTAudioPlugin / GPTAudioMCP 0.7
 
-A small, UI-less ChatGPT plugin plus a self-owned MCP for both music generation and multimodal music listening.
+A UI-less ChatGPT/Sites MCP for **Replicate-only** music generation, audio listening and iterative reuse. ChatGPT supplies creative direction; the service executes validated model operations and stores user-owned jobs/audio references.
 
-The design deliberately keeps two concerns separate:
-
-```text
-ChatGPT plugin
-  = conversation context + native attachment workflow
-
-GPTAudioMCP
-  = stable music tool contract + provider adapters
-```
-
-Replicate is the only provider enabled in v0.4, but the MCP no longer hard-wires provider logic into the tool layer.
-
-## User flow
+## Architecture
 
 ```text
-normal ChatGPT conversation
-        +
-native ChatGPT audio attachment (optional)
-        │
-        ├─ ChatGPT creates conversationSummary
-        └─ ChatGPT creates directorPrompt
-        │
-        ▼
-GPTAudioMCP.generate_music
-        │
-        ├─ first use -> Connect Replicate
-        ├─ select provider adapter
-        ├─ inspect model schema
-        ├─ map native attachment when supported
-        └─ run generation
-        │
-        ▼
-generated audio URL
+ChatGPT / Codex
+  -> Sites gateway OAuth + trusted user identity
+  -> src/worker.ts
+  -> src/music-server.ts (shared tool contract)
+  -> Replicate prediction
+  -> get_music_job -> persisted audioId -> analyze_music / next generation
 ```
 
-There is no embedded widget and no separate OpenAI text-model API.
+The Node entry `src/server.ts` keeps the existing local OAuth flow and uses the same tools. Sites never imports the Node HTTP, filesystem or SQLite modules. Node 22.13+ is required for the local SQLite adapter.
 
-## Why own the MCP?
+## Tools
 
-Existing music MCPs are useful references, but owning the MCP keeps the ChatGPT-facing contract stable:
+| Tool | Behavior |
+| --- | --- |
+| `get_service_status` | Version, build SHA, exact tool list, default models and storage/segment capabilities. No prediction. |
+| `get_music_provider_profile` | Connected Replicate identity. |
+| `inspect_music_model` | Actual model schema, exact audio field, mode and prompt/duration limits. No prediction. |
+| `generate_music` | Generate, cover, melody-reference or continue; returns a job or completed result. |
+| `analyze_music` | Listen to an attachment or audioId; optionally crop a PCM WAV range. |
+| `get_music_job` | Poll an existing prediction and import completed outputs. Never regenerates. |
+| `cancel_music_job` | Request cancellation and report actual provider state, not a zero-cost guarantee. |
+| `register_music_audio` | Register an attachment as a user-owned audioId. |
+| `get_music_audio` | Read asset metadata and parent/version lineage. |
+| `delete_music_audio` | Delete owned saved bytes/metadata only on an explicit user request. |
+| `compare_music` | Two independent billable listens with the same rubric, then ChatGPT synthesizes the comparison. |
 
-- native ChatGPT file parameter shape stays under our control;
-- conversation-to-music fields stay consistent;
-- provider changes do not require changing the plugin workflow;
-- authentication stays aligned with the provider we support;
-- incompatible audio models fail explicitly rather than silently discarding the attachment.
+File parameters declare all four native properties: `download_url` and `file_id` are required; `mime_type` and `file_name` are declared but optional. Never fabricate a ChatGPT file ID for generated audio: use the returned service `audioId` instead.
 
-## MCP tools
+## Model routing
 
-### `analyze_music`
+| Intent | Default Replicate model |
+| --- | --- |
+| New instrumental/BGM | `fishaudio/ace-step-1.5` |
+| New vocal song (`instrumental=false`) | `minimax/music-2.6` |
+| Explicit whole-song cover | `minimax/music-cover` |
+| Melody reference / continuation | `meta/musicgen` (pinned original version) |
+| Listening | `lucataco/qwen2.5-omni-7b` |
 
-Listens to a native ChatGPT audio attachment with a multimodal audio-language model on Replicate and returns text analysis grounded in the actual audio.
+`generationMode` is `auto | generate | cover | reference | continue`. An explicit `model` overrides model selection, not validation. Auto with a source defaults to melody reference, not cover merely because vocals were requested. Cover must reflect the user's actual intent and source compatibility.
 
-Inputs:
+The ACE-Step and MiniMax 2.6 Replicate deployments do **not** expose reference audio. Cover uses `audio_url`, never `bitrate` or `prompt`. Discovery no longer infers file inputs from prose descriptions.
 
-- `audio` — required native ChatGPT audio attachment
-- `question` — what the user wants to know about the audio
-- optional `conversationSummary`
-- optional `analysisFocus` list
-- optional `model`
+Generation accepts `lyrics`, `instrumental`, `autoLyrics`, `seed`, `audioFormat`, optional `duration`, `sourceAudioId` or native `referenceAudio`. All creative requirements must already be compiled into `directorPrompt` (ACE-Step: 512 characters; MiniMax: 2000). The raw conversation summary is not appended to exceed that budget. Overlong prompts/lyrics and incompatible inputs fail instead of being silently truncated. Models without a duration field return a warning that the requested duration was not applied.
 
-Default analysis model:
+`get_service_status` reports defaults actually used. Node environment variables can override defaults; the current Sites Worker uses compiled defaults or explicit per-call model selection. Merely setting a Sites environment variable does not currently override the module's model defaults.
 
-```text
-lucataco/qwen2.5-omni-7b
-```
+## Reusable workflow
 
-The provider disables audio output when the selected model exposes `generate_audio`, because ChatGPT only needs the textual listening result.
+1. Call `generate_music` with a stable `requestKey` for this operation.
+2. Save `jobId`. Poll `get_music_job` using `pollAfterSeconds` until a terminal state.
+3. A completed generation returns `audioId`/`audioIds`, model version and effective prompt.
+4. Call `analyze_music(audioId, question)` directly. No download/re-upload to ChatGPT.
+5. Call another generation with `sourceAudioId`; the result records its parent audio ID.
 
+A repeated request key with the same input reuses the existing job; changed inputs with the same key are rejected. At most three active/unreconciled jobs are accepted per user. An ambiguous network failure during submission returns `submission_unknown`: reconcile the provider outcome instead of blindly submitting again. This is not a claim of exactly-once behavior across an external API/database failure.
 
-### `generate_music`
+Completed audio import is retryable via `storage_pending`; polling retries storage, not generation. Remote predictions receive a ten-minute cancellation deadline. HTTP wait timeouts are separate from cancellation confirmation.
 
-Primary tool.
+## Audio storage and retention
 
-Inputs:
+Sites jobs and metadata use D1 table `music_records`; credentials remain in the existing separately encrypted `replicate_connections` table. All lookups, request keys and parent IDs are user-scoped. Optimistic record revisions protect concurrent updates.
 
-- `provider` — currently only `replicate`
-- optional `model`
-- `conversationSummary`
-- `directorPrompt`
-- `duration`
-- optional `referenceAudio` from ChatGPT's normal attachment control
-- optional `continuation`
+The Worker accepts an optional R2-compatible binding named **`AUDIO_BUCKET`**. With it, completed audio bytes are stored under user-scoped opaque object keys. Without it, the API explicitly returns `storage: temporary` and keeps only the provider/source URL, not a durable copy.
 
-The file input uses ChatGPT's standard `openai/fileParams` contract.
+**This branch does not provision object storage automatically.** Existing `.openai/hosting.json` keeps the original project ID/D1 binding and `r2: null`. Configure the appropriate platform-managed bucket/binding before claiming cloud audio persistence. `get_service_status.durableAudio` is the runtime truth. The local test harness uses a real filesystem object store.
 
-### `inspect_music_model`
+Replicate API outputs are normally retained for one hour. This version imports outputs when the completed job is polled; it does not install a background webhook or scheduled sweeper. Poll completed jobs before provider retention expires. Unattended completion capture, storage quotas/retention schedules and automated submission reconciliation are follow-up work, not implemented promises.
 
-Reads the provider model schema and reports whether it accepts a text prompt, reference audio, duration, continuation, output format, and any unsupported required inputs.
+Authenticated `GET /audio/{audioId}` serves saved audio through the Sites identity boundary. It is not a public shared link. Explicit deletion removes the service copy, not the original ChatGPT attachment or Replicate prediction.
 
-### `get_music_provider_profile`
+## Listening and comparison boundaries
 
-Returns the connected provider identity. v0.4 maps this to the connected Replicate account.
+`startSec`/`endSec` perform real sample-aligned slicing for **PCM or IEEE-float WAV**. The supplied range is validated against file length and returned as `analyzedRange`.
 
-## Provider layer
+Full MP3 and other provider-supported audio still work for whole-file listening. Compressed MP3/M4A segment requests currently fail clearly and request conversion to WAV; they never silently analyze the whole song. Request `audioFormat: wav` when generating material for a subsequent segment test.
 
-```text
-src/providers/
-├─ types.ts
-├─ index.ts
-└─ replicate.ts
-```
+Structured analysis is validated as `summary`, `observations`, `uncertainties`, and `suggestions`. Non-JSON model responses remain available as the raw `answer` with `structuredStatus: unavailable`; the server does not invent missing observations or confidence scores.
 
-`MusicProvider` defines the internal contract:
+`compare_music` submits two independent analyses. Its output is not a joint raw-audio comparison model result, and partial failures must be reported before drawing conclusions. It incurs two inference requests.
 
-```ts
-interface MusicProvider {
-  id
-  defaultModel
-  inspectModel(credential, model)
-  generate(credential, request)
-}
-```
+## Sites upgrade
 
-Adding another backend later should be a provider implementation instead of a rewrite of the ChatGPT tool contract.
-
-## Replicate behavior
-
-The Replicate adapter:
-
-1. fetches the selected model's OpenAPI input schema;
-2. detects common prompt/audio/duration/continuation fields;
-3. downloads the temporary ChatGPT attachment;
-4. converts it to a `File` for the Replicate SDK;
-5. rejects audio when the selected model has no recognizable audio input;
-6. runs the prediction and extracts the returned audio URL.
-
-Default model:
-
-```text
-meta/musicgen
-```
-
-## Account connection
-
-Replicate's public API uses API tokens rather than a third-party OAuth consent flow.
-
-GPTAudioMCP therefore exposes MCP OAuth to ChatGPT while using an encrypted Replicate token behind that connection:
-
-1. ChatGPT triggers Connect.
-2. The authorization page links to Replicate's API-token page.
-3. The user pastes the token into the authorization page, not chat.
-4. The MCP validates it against Replicate.
-5. The credential is encrypted under `.data/`.
-6. ChatGPT receives opaque OAuth access/refresh tokens.
-
-## Local development
+Keep the same Sites project and `AUTH_ENCRYPTION_KEY`; do not create a replacement site or overwrite the original credential migration. Apply the new migration `drizzle/0001_mute_quentin_quire.sql` using the platform migration mechanism before serving workflow calls. The generated Drizzle snapshot and journal are checked in. Migration 0000 is unchanged.
 
 ```powershell
-git clone git@github.com:Lisuiwen/GPTAudioPlugin.git
-cd GPTAudioPlugin
-npm install
-Copy-Item .env.example .env
-npm run dev
-```
-
-Defaults:
-
-```env
-REPLICATE_MODEL=meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb
-REPLICATE_ANALYSIS_MODEL=lucataco/qwen2.5-omni-7b
-PORT=8787
-PUBLIC_BASE_URL=http://127.0.0.1:8787
-```
-
-MCP endpoint:
-
-```text
-http://127.0.0.1:8787/mcp
-```
-
-## GPT 桌面端：Sites 托管 MCP（v0.6.0）
-
-服务部署到 Sites，提供无会话的 HTTP `POST /mcp`。Sites 负责桌面端连接的 OAuth、登录和访问控制；服务只使用平台提供的用户身份，不再在托管端运行自己的 OAuth 授权服务器。
-
-1. 在桌面端的「Plugins → Personal → Created by you」中安装或连接 Sites 自动创建的 GPT Audio MCP 插件。
-2. 打开部署后的站点，登录并连接 Replicate。API 令牌只在连接页面输入，不能发送到对话中。
-3. 回到桌面端，先调用 `get_music_provider_profile` 验证账号，再调试音乐生成或音频分析。
-
-每位用户的 Replicate 连接独立保存到 D1，令牌使用 AES-GCM 加密，并绑定该用户身份。更新服务不会丢失连接。部署前通过 Sites 环境变量设置固定的 32 字节 base64 `AUTH_ENCRYPTION_KEY`，后续部署保留同一个密钥。D1 的逻辑绑定为 `DB`；表结构迁移位于 `drizzle/`，由 Sites 在发布时执行。
-
-`.openai/hosting.json` 保存此项目的 Sites 标识、D1 绑定和 MCP 能力。`src/worker.ts` 为托管入口，构建产物为 `dist/server/index.js`。音乐工具与本机入口共用 `src/music-server.ts` 和 provider 适配器。
-
-发布前运行：
-
-```powershell
+npm ci
 npm run typecheck
 npm test
 ```
 
-修改数据库结构时运行 `npm run db:generate` 并检查生成的 SQL。已经发布的迁移不能重写，应追加新迁移。之后使用桌面端的 Sites 托管工具保存和发布当前构建；复用现有项目标识，不重复创建站点。Sites 会自动创建并维护对应插件。
+`npm run build` builds Node and a browser-only Worker at `dist/server/index.js`. The Worker build includes the source Git SHA. Use the existing desktop Sites deployment workflow to publish the build, then verify `get_service_status` and `tools/list`. Updating GitHub alone does not update the live Sites runtime or the current conversation's tool catalog.
 
-### 本机开发入口
+The Worker trusts `oai-authenticated-user-id` **only behind the Sites authentication gateway**. Never expose the Worker directly with a caller-controlled identity header. Existing per-user token encryption and connection form origin checks are retained. Audio downloads are bounded and reject local/numeric destinations; a production network egress policy is still needed for comprehensive SSRF/DNS-rebinding protection.
 
-`mcp.json` 和 `.mcp.json` 只用于本机开发，默认地址为 `http://127.0.0.1:8787/mcp`；Sites 插件使用平台提供的连接入口。项目已关闭旧的本机插件自动启用，避免调试时调用旧的服务。
+## Brook / local end-to-end debugging
 
-本机 Node 服务保留原有 OAuth 流程，授权数据保存在 `AUTH_DATA_DIR` 或 `.data/`。本机服务运行后，执行 `npm run check:mcp`，验证版本、四个工具和未授权时的 OAuth 提示；也可通过参数或 `MCP_URL` 指定其他支持此本机授权流程的 MCP 地址。该脚本不会调用计费的音乐工具。Sites 托管连接应通过已连接的 Sites 插件验证。
+Do not disturb an existing working checkout. Use an independent Git worktree. After installing/building:
 
-如需打包本机插件，执行 `npm run package:plugin`。此包用于本机入口；桌面端的 Sites 托管调试使用 Sites 自动生成的插件。
-
-## Project structure
-
-```text
-GPTAudioPlugin/
-├─ plugin.json
-├─ mcp.json
-├─ .mcp.json
-├─ .codex-plugin/plugin.json
-├─ skills/audio-creator/SKILL.md
-├─ src/
-│  ├─ auth.ts
-│  ├─ providers/
-│  │  ├─ types.ts
-│  │  ├─ index.ts
-│  │  └─ replicate.ts
-│  └─ server.ts
-├─ scripts/package-plugin.ps1
-└─ README.md
+```powershell
+# Real compiled Sites Worker + local SQLite/object storage, loopback only.
+node scripts/debug-site.mjs
 ```
 
-## Future providers
+Open `http://127.0.0.1:8797/connect` and connect Replicate **privately on that page**. The cloud connection is not copied into local tests. Never paste a token into chat or commit `.env`, encryption keys, databases or reports. The harness rejects foreign Host/Origin values and must never be published as a public gateway.
 
-The intended extension point is now explicit. Possible future providers include Suno gateways, fal.ai, or other hosted/open models, while ChatGPT continues calling the same `generate_music` tool.
+In another terminal:
+
+```powershell
+# No billable predictions: schema discovery, deployment metadata and connection.
+node scripts/live-workflow.mjs
+
+# Explicitly billable: one 10-second WAV generation and one 0-4s listening test.
+node scripts/live-workflow.mjs --billable
+```
+
+The real test uses MCP SDK calls, stable request keys, polling, audioId reuse and a duplicate-submit assertion. It resumes from `.data/live-workflow-report.json` instead of blindly repeating generation. Override `MCP_URL`, `MUSIC_LIVE_REPORT`, `MUSIC_DEBUG_PORT` or `MUSIC_DEBUG_DIR` as needed. Do not point the debug harness at a public interface.
+
+Automated `npm test` exercises the **actual Sites bundle**, real SQLite/filesystem storage, OAuth regressions, ownership isolation, retries, genuine WAV cropping and model mappings with mocked external HTTP. Passing those tests does not by itself prove live Replicate inference or ChatGPT desktop UI behavior; record live-test results separately.
+
+## Source layout
+
+```text
+src/music-server.ts          shared MCP tools
+src/music-workflow.ts        persistent prediction workflow
+src/workflow-store.ts        user-owned job/audio records
+src/audio.ts                 bounded download + WAV slicing
+src/providers/replicate.ts   validated model plans and provider operations
+src/replicate-transport.ts   HTTP and remote prediction deadlines
+src/worker.ts                Sites authenticated entry
+src/sites-store.ts           existing encrypted credential store
+src/server.ts               Node OAuth entry
+src/node-workflow.ts        local SQLite/filesystem adapters
+scripts/debug-site.mjs       loopback Sites harness
+scripts/live-workflow.mjs    resumable opt-in live test
+```

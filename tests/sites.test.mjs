@@ -8,11 +8,13 @@ import test from "node:test";
 const source = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
 const { default: worker } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 const migration = await readFile(new URL("../drizzle/0000_swift_chronomancer.sql", import.meta.url), "utf8");
+const musicMigration = await readFile(new URL('../drizzle/0001_mute_quentin_quire.sql', import.meta.url), 'utf8');
 const origin = "https://gpt-audio.example";
 
 function fixture(t) {
   const db = new DatabaseSync(":memory:");
   db.exec(migration);
+  db.exec(musicMigration);
   t.after(() => db.close());
   const env = {
     AUTH_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
@@ -39,7 +41,7 @@ function mockProvider(t) {
     calls.push(request);
     const url = new URL(request.url);
     if (url.pathname === "/v1/account") return Response.json({ username: "replicate-user", name: "Test User" });
-    if (url.hostname === "audio.example") return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
+    if (["audio.example", "replicate.example"].includes(url.hostname)) return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
     if (url.pathname.startsWith("/v1/models/")) return Response.json({ latest_version: { id: "test-version", openapi_schema: { components: { schemas: { Input: { properties: {
       prompt: { type: "string" }, audio: { type: "string" }, duration: { type: "integer" }, generate_audio: { type: "boolean" },
     }, required: ["prompt"] } } } } } });
@@ -58,10 +60,10 @@ test("Sites discovery uses four shared tools and protects calls without platform
   const f = fixture(t);
   const init = await f.rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } });
   assert.equal(init.status, 200);
-  assert.equal((await init.json()).result.serverInfo.version, "0.6.0");
+  assert.equal((await init.json()).result.serverInfo.version, "0.7.0");
   const listed = await f.rpc("tools/list");
   const { result: { tools } } = await listed.json();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
   assert.ok(tools.every((tool) => tool._meta.securitySchemes[0].type === "noauth"));
   assert.equal((await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} })).status, 401);
   const absent = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-one");

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Generate music and listen to attached audio for grounded music analysis through GPTAudioMCP.",
   "author": {
     "name": "Lisuiwen"

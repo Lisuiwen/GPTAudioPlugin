@@ -1,21 +1,28 @@
 ---
 name: audio-creator
-description: Generate music through GPTAudioMCP using the current ChatGPT conversation and an optional audio file attached directly to the ChatGPT message.
+description: Generate, reference, cover or continue music through Replicate; reuse audioIds and recover existing jobs without duplicate paid submissions.
 ---
 
 # Audio Creator
 
-Use this workflow when the user wants to create, iterate on, continue, or transform music.
+Stay in the current conversation. No separate text-model API or recording panel is required.
 
-1. Stay in the normal ChatGPT conversation. GPTAudioPlugin has no custom recording or upload UI.
-2. Reuse the current ChatGPT conversation as the text reasoning layer. Do not call a separate text-model API.
-3. Immediately before generation, build:
-   - `conversationSummary`: concise creative context established in the chat.
-   - `directorPrompt`: a production-ready music-generation prompt based on that context and the latest request.
-4. If the user attached an audio file with ChatGPT's normal attachment control, pass it directly as `referenceAudio`. Never ask them to upload the same file again.
-5. Preserve relevant constraints: scene/story, intended use, mood, energy, genre references, tempo, instruments, sound design, structure, duration, looping, vocals, and continuation intent.
-6. The MCP currently uses the user's Replicate account. Protected tools trigger the Connect flow; never ask the user to paste a Replicate token into chat.
-7. For the default model, call `generate_music` directly. The MCP inspects model capabilities internally.
-8. If the user explicitly chooses another model, use `inspect_music_model` when useful before generation.
-9. Never imply the audio attachment influenced the result when the selected model cannot accept audio. The server rejects incompatible audio inputs.
-10. `generate_music` is billable against the connected provider account.
+Check `get_service_status` when the deployed build or tool catalog is uncertain. Read actual model limits through `inspect_music_model`; never infer capabilities from the model name or a README.
+
+Compile the user's creative context into `directorPrompt`, preserving instrumentation, mood, scene, structure, vocal preference and repetition/looping requirements. Keep `conversationSummary` as explanatory context; the service does not append it beyond the model prompt budget. ACE-Step accepts 512 characters; current MiniMax adapters accept 2000. Rewrite overlong prompts deliberately rather than silently dropping constraints. Do not truncate supplied lyrics.
+
+Select the operation explicitly when intent is clear:
+- `generate`: new music with no source. Default instrumental is ACE-Step; vocal requests route to MiniMax 2.6.
+- `reference`: melody-conditioned new music using a source, currently MusicGen.
+- `continue`: extend the source, currently MusicGen.
+- `cover`: whole-song re-arrangement with compatible source material, currently MiniMax Cover. It is not local inpainting and does not guarantee instrumental-only output.
+
+Use `sourceAudioId` for a previously returned service asset, or `referenceAudio` for the native ChatGPT attachment. Never fabricate an attachment file_id for a generated URL, silently ignore source audio, or switch reference/cover/continue semantics just to make a request succeed.
+
+Set `instrumental`, optional `lyrics`, `autoLyrics`, `duration`, `seed`, and `audioFormat` only according to the user's request and model support. Request WAV when subsequent sample-based segment analysis is planned. Do not promise exact duration when the model has no duration parameter, or a seamless loop without checking it.
+
+Use one stable `requestKey` per creative operation. A transport retry must reuse that key. A new version gets a new key. Record the returned `jobId` and poll `get_music_job` according to `pollAfterSeconds`. Queued/processing is not completion. `storage_pending` means retry importing the same result, not regenerate. `submission_unknown` requires reconciliation; never blindly create another paid prediction. Cancellation is not proof of zero charges.
+
+On completion retain `audioId`, `audioIds`, model/version, effective prompt and warnings. Use those IDs directly for listening or later versions; do not make the user upload the generated file again. Poll completed jobs promptly: output import happens on polling, not through a background webhook. If storage is temporary, disclose the expiry instead of promising future reuse.
+
+Protected operations use the connected Replicate account. Tokens belong only on the account connection page, never in conversation, code, logs or source control. Generation is billable. Respect explicit deletion/cancellation intent.

@@ -1,6 +1,6 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,8 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "check:mcp": "node scripts/check-mcp.mjs",
     "inspect": "npx @modelcontextprotocol/inspector@latest",
-    "package:plugin": "powershell -ExecutionPolicy Bypass -File scripts/package-plugin.ps1"
+    "package:plugin": "powershell -ExecutionPolicy Bypass -File scripts/package-plugin.ps1",
+    "test:workflow": "npm run build && node --test tests/workflow.test.mjs"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
@@ -31,5 +32,8 @@
     "esbuild": "^0.28.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }
