@@ -1,12 +1,15 @@
 {
   "name": "gpt-audio-plugin",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/clean-build.mjs && npm run build:node && npm run build:site",
+    "build:node": "tsc -p tsconfig.json",
+    "build:site": "node scripts/build-site.mjs",
+    "db:generate": "drizzle-kit generate",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "check:mcp": "node scripts/check-mcp.mjs",
@@ -14,13 +17,18 @@
     "package:plugin": "powershell -ExecutionPolicy Bypass -File scripts/package-plugin.ps1"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.2",
+    "@cfworker/json-schema": "^4.1.1",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "buffer": "^6.0.3",
     "dotenv": "^16.4.5",
     "replicate": "^1.4.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "drizzle-kit": "^0.31.0",
+    "drizzle-orm": "^0.45.3",
+    "esbuild": "^0.28.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

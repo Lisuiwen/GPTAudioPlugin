@@ -33,7 +33,7 @@ async function fixture(t) {
     async start(cwd = directory) {
       const child = spawn(process.execPath, [serverPath], {
         cwd,
-        env: { ...process.env, PORT: "0", PUBLIC_BASE_URL: "http://127.0.0.1", AUTH_DATA_DIR: dataDir, AUTH_ENCRYPTION_KEY: "", RENDER: "" },
+        env: { ...process.env, PORT: "0", PUBLIC_BASE_URL: "http://127.0.0.1", AUTH_DATA_DIR: dataDir, AUTH_ENCRYPTION_KEY: "" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       processes.add(child);

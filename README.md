@@ -173,53 +173,34 @@ MCP endpoint:
 http://127.0.0.1:8787/mcp
 ```
 
-## Deployment and OAuth recovery (v0.5.1)
+## GPT 桌面端：Sites 托管 MCP（v0.6.0）
 
-Use a stable HTTPS endpoint with the current build. The plugin version and MCP
-server version must both be `0.5.1`. Updating the installed skills alone does not
-update the remote server.
+服务部署到 Sites，提供无会话的 HTTP `POST /mcp`。Sites 负责桌面端连接的 OAuth、登录和访问控制；服务只使用平台提供的用户身份，不再在托管端运行自己的 OAuth 授权服务器。
 
-Run `npm run typecheck`, `npm test`, and `npm run package:plugin` before release.
-After deploying, run `npm run check:mcp`. This verifies the deployed version,
-all four tools, and the unauthenticated OAuth challenge without generating or
-analyzing music. Pass another endpoint with `npm run check:mcp -- <mcp-url>`.
+1. 在桌面端的「Plugins → Personal → Created by you」中安装或连接 Sites 自动创建的 GPT Audio MCP 插件。
+2. 打开部署后的站点，登录并连接 Replicate。API 令牌只在连接页面输入，不能发送到对话中。
+3. 回到桌面端，先调用 `get_music_provider_profile` 验证账号，再调试音乐生成或音频分析。
 
-OAuth profiles, access tokens, refresh tokens, authorization codes, and the
-encryption key must survive restarts. Set `AUTH_DATA_DIR` to an absolute path on
-persistent storage, for example `/var/data/gpt-audio`. Preserve both
-`auth-store.json` and `auth.key`. Alternatively keep the same 32-byte base64
-`AUTH_ENCRYPTION_KEY` across deployments, while still persisting the store.
-Writes to the store are atomic; malformed existing stores are preserved for
-recovery instead of being silently replaced with an empty store.
+每位用户的 Replicate 连接独立保存到 D1，令牌使用 AES-GCM 加密，并绑定该用户身份。更新服务不会丢失连接。部署前通过 Sites 环境变量设置固定的 32 字节 base64 `AUTH_ENCRYPTION_KEY`，后续部署保留同一个密钥。D1 的逻辑绑定为 `DB`；表结构迁移位于 `drizzle/`，由 Sites 在发布时执行。
 
-The supplied `render.yaml` uses a Free instance for temporary testing.
-For an existing standalone Render service, change that service's compute plan,
-attach the disk at `/var/data/gpt-audio`, set `AUTH_DATA_DIR` to the same path,
-and set `PUBLIC_BASE_URL` to its public HTTPS origin. Do not create a duplicate
-service to apply these settings. A paid compute instance and a 1 GB disk are
-needed for this persistent setup. Render Free instances cannot attach disks and lose local
-files when they spin down, restart, or redeploy; Free is only suitable for a
-temporary smoke test of this file-backed OAuth implementation.
+`.openai/hosting.json` 保存此项目的 Sites 标识、D1 绑定和 MCP 能力。`src/worker.ts` 为托管入口，构建产物为 `dist/server/index.js`。音乐工具与本机入口共用 `src/music-server.ts` 和 provider 适配器。
 
-If a client reports `invalid_grant`, the old refresh token cannot be recovered
-after the server has lost its store. After configuring persistent storage and
-deploying, reconnect Replicate through the plugin's authorization page. In
-Codex, use:
+发布前运行：
 
 ```powershell
-codex plugin marketplace upgrade gpt-audio-local
-codex plugin add gpt-audio-plugin@gpt-audio-local
-codex mcp logout gpt-audio
-codex mcp login gpt-audio
+npm run typecheck
+npm test
 ```
 
-Restart the desktop app after the plugin update if the current session retains
-the old tool catalog. In ChatGPT, reconnect the plugin's account connection.
-Never paste the Replicate API token into chat.
+修改数据库结构时运行 `npm run db:generate` 并检查生成的 SQL。已经发布的迁移不能重写，应追加新迁移。之后使用桌面端的 Sites 托管工具保存和发布当前构建；复用现有项目标识，不重复创建站点。Sites 会自动创建并维护对应插件。
 
-If Render reports a GitHub repository `404` during deploy, reconnect its GitHub
-integration and grant access to this private repository. A successful local
-Git push does not establish Render's permission to clone the repository.
+### 本机开发入口
+
+`mcp.json` 和 `.mcp.json` 只用于本机开发，默认地址为 `http://127.0.0.1:8787/mcp`；Sites 插件使用平台提供的连接入口。项目已关闭旧的本机插件自动启用，避免调试时调用旧的服务。
+
+本机 Node 服务保留原有 OAuth 流程，授权数据保存在 `AUTH_DATA_DIR` 或 `.data/`。本机服务运行后，执行 `npm run check:mcp`，验证版本、四个工具和未授权时的 OAuth 提示；也可通过参数或 `MCP_URL` 指定其他支持此本机授权流程的 MCP 地址。该脚本不会调用计费的音乐工具。Sites 托管连接应通过已连接的 Sites 插件验证。
+
+如需打包本机插件，执行 `npm run package:plugin`。此包用于本机入口；桌面端的 Sites 托管调试使用 Sites 自动生成的插件。
 
 ## Project structure
 

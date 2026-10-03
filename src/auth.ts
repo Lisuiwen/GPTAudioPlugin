@@ -60,13 +60,9 @@ type AuthorizationCodeRecord = {
   expiresAt: number;
 };
 
-export type AuthSession = {
-  profileId: string;
-  username: string;
-  name?: string;
-  replicateToken: string;
-  scope: string[];
-};
+export type { AuthSession } from "./session.js";
+import type { AuthSession } from "./session.js";
+
 
 const dataDir = resolve(process.env.AUTH_DATA_DIR?.trim() || ".data");
 const storePath = resolve(dataDir, "auth-store.json");

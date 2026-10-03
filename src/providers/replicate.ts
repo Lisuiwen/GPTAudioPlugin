@@ -1,4 +1,3 @@
-import { File } from "node:buffer";
 import Replicate from "replicate";
 
 import type {
@@ -11,11 +10,11 @@ import type {
 } from "./types.js";
 
 const DEFAULT_MODEL =
-  process.env.REPLICATE_MODEL?.trim() ||
+  (typeof process !== "undefined" ? process.env.REPLICATE_MODEL?.trim() : undefined) ||
   "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 
 const DEFAULT_ANALYSIS_MODEL =
-  process.env.REPLICATE_ANALYSIS_MODEL?.trim() ||
+  (typeof process !== "undefined" ? process.env.REPLICATE_ANALYSIS_MODEL?.trim() : undefined) ||
   "lucataco/qwen2.5-omni-7b";
 
 const latestModelVersions = new Map<string, string>();
@@ -287,7 +286,7 @@ async function downloadReferenceAudio(
     );
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await response.arrayBuffer();
   if (buffer.byteLength > 100 * 1024 * 1024) {
     throw new Error("Reference audio exceeds Replicate's 100MB file limit.");
   }
