@@ -1,8 +1,6 @@
 {
   "project_id": "appgprj_6ac092be332c8191a22d7b31a448f1a8",
-  "d1": {
-    "binding": "DB"
-  },
+  "d1": "DB",
   "r2": null,
   "capabilities": [
     "mcp"
