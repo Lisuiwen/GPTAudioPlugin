@@ -97,14 +97,14 @@ async function exchange(url, fields) {
   return fetch(`${url}/token`, { method: "POST", body: new URLSearchParams(fields) });
 }
 
-test("SDK discovery lists four tools and unauthenticated calls request OAuth without contacting Replicate", async (t) => {
+test("SDK discovery lists all workflow tools and unauthenticated calls request OAuth without contacting Replicate", async (t) => {
   const f = await fixture(t);
   const server = await f.start();
   const client = new Client({ name: "gpt-audio-test", version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`)));
   t.after(() => client.close());
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
   const result = await client.callTool({ name: "get_music_provider_profile", arguments: {} });
   assert.equal(result.isError, true);
   assert.match(result._meta["mcp/www_authenticate"][0], /resource_metadata=/);

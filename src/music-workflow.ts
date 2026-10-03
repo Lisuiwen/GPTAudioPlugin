@@ -12,6 +12,7 @@ type Job = RecordValue & {
   analyzedRange?: { startSec: number; endSec: number }; audioFormat?: string;
   providerOutput?: unknown; result?: Record<string, unknown>; finalizingUntil?: number;
 };
+class ResultShapeError extends Error {}
 const terminal = new Set(["succeeded", "failed", "canceled"]);
 const StructuredAnalysis = z.object({ summary: z.string().max(10000), observations: z.array(z.string().max(3000)).max(50), uncertainties: z.array(z.string().max(3000)).max(50), suggestions: z.array(z.string().max(3000)).max(50) });
 export function parseAnalysis(answer: string): { analysis?: z.infer<typeof StructuredAnalysis>; structuredStatus: string } {
@@ -48,7 +49,8 @@ export class MusicWorkflow {
     const job: Job = { id: newId("job"), kind: "job", revision: 0, action, status: "preparing", requestKey, fingerprint, createdAt: Date.now(), updatedAt: Date.now(), warnings: [] };
     if (!(await this.store.insert(owner, job, requestKey))) {
       const existing = await this.store.findRequest<Job>(owner, requestKey);
-      if (!existing || existing.fingerprint !== fingerprint) throw new Error("Concurrent request-key conflict.");
+      if (!existing) throw new Error("At most three active or unreconciled music jobs are allowed per user. Finish or cancel an existing job before creating another.");
+      if (existing.fingerprint !== fingerprint) throw new Error("Concurrent request-key conflict.");
       return this.view(existing);
     }
     let startingPrediction = false;
@@ -112,11 +114,11 @@ export class MusicWorkflow {
     try {
       if (job.action === "analyze") {
         const answer = outputText(prediction.output);
-        if (!answer) throw new Error("No analysis text was returned.");
+        if (!answer) throw new ResultShapeError("No analysis text was returned.");
         job.result = { answer, ...parseAnalysis(answer), analyzedRange: job.analyzedRange || null, sourceAudioId: job.sourceAudioId };
       } else {
         const urls = outputUrls(prediction.output);
-        if (!urls.length) throw new Error("No generated audio was returned.");
+        if (!urls.length) throw new ResultShapeError("No generated audio was returned.");
         if (urls.length > 4) throw new Error("Unexpectedly many output files; inspect the prediction before importing them.");
         const audios = [];
         for (let index = 0; index < urls.length; index++) {
@@ -127,9 +129,9 @@ export class MusicWorkflow {
       }
       job.status = "succeeded";
       delete job.providerOutput;
-    } catch {
-      job.status = "storage_pending";
-      job.result = { error: "Prediction completed, but output import is incomplete. Poll the same job to retry import without generating again.", audioUrls: job.action === "generate" ? outputUrls(prediction.output) : undefined };
+    } catch (error) {
+      job.status = error instanceof ResultShapeError ? "failed" : "storage_pending";
+      job.result = { error: error instanceof ResultShapeError ? error.message : "Prediction completed, but output import is incomplete. Poll the same job to retry import without generating again.", audioUrls: job.action === "generate" ? outputUrls(prediction.output) : undefined };
     }
     job.updatedAt = Date.now(); delete job.finalizingUntil;
     if (!await this.store.update(owner, job)) return this.view(await this.require(owner, job.id));

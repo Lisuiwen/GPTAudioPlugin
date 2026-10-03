@@ -18,8 +18,8 @@ export class WorkflowStore {
     return row ? JSON.parse(row.payload) as T : undefined;
   }
   async insert(owner: string, value: RecordValue, requestKey?: string): Promise<boolean> {
-    const row = await this.db.prepare("INSERT INTO music_records (user_id,id,kind,request_key,payload,revision,updated_at) VALUES (?,?,?,?,?,0,?) ON CONFLICT DO NOTHING RETURNING id")
-      .bind(owner, value.id, value.kind, requestKey || null, JSON.stringify({ ...value, revision: 0 }), Date.now()).first<{ id: string }>();
+    const row = await this.db.prepare("INSERT INTO music_records (user_id,id,kind,request_key,payload,revision,updated_at) SELECT ?,?,?,?,?,0,? WHERE ? = 'audio' OR (SELECT COUNT(*) FROM music_records WHERE user_id = ? AND kind = 'job' AND json_extract(payload,'$.status') IN ('preparing','submitting','starting','processing','submission_unknown')) < 3 ON CONFLICT DO NOTHING RETURNING id")
+      .bind(owner, value.id, value.kind, requestKey || null, JSON.stringify({ ...value, revision: 0 }), Date.now(), value.kind, owner).first<{ id: string }>();
     return !!row;
   }
   async update(owner: string, value: RecordValue): Promise<boolean> {

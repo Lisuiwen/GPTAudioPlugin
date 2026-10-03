@@ -1,4 +1,5 @@
 import Replicate from "replicate";
+import { predictionClient } from "../replicate-transport.js";
 import { downloadAudio, sliceWav } from "../audio.js";
 import type { AnalyzeMusicInput, AnalyzeMusicResult, GenerateMusicInput, GenerateMusicResult, ModelCapabilities, MusicProvider } from "./types.js";
 
@@ -170,15 +171,15 @@ export async function prepareAnalysis(credential: string, request: AnalyzeMusicI
 
 export async function createPrediction(token: string, plan: PredictionPlan): Promise<PredictionState> {
   // File inputs are uploaded by the Replicate SDK; no credentials are put in URLs.
-  return await new Replicate({ auth: token }).predictions.create({ version: plan.version, input: plan.input }) as PredictionState;
+  return await predictionClient(token).predictions.create({ version: plan.version, input: plan.input }) as PredictionState;
 }
 export async function getPrediction(token: string, id: string): Promise<PredictionState> {
   if (!/^[\w-]+$/.test(id)) throw new Error("Invalid prediction ID.");
-  return await new Replicate({ auth: token }).predictions.get(id) as PredictionState;
+  return await predictionClient(token).predictions.get(id) as PredictionState;
 }
 export async function cancelPrediction(token: string, id: string): Promise<PredictionState> {
   if (!/^[\w-]+$/.test(id)) throw new Error("Invalid prediction ID.");
-  return await new Replicate({ auth: token }).predictions.cancel(id) as PredictionState;
+  return await predictionClient(token).predictions.cancel(id) as PredictionState;
 }
 export function outputUrls(value: unknown): string[] {
   if (typeof value === "string") return /^https:\/\//.test(value) ? [value] : [];

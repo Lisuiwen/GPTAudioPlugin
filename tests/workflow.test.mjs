@@ -215,3 +215,26 @@ test("unconfigured object storage explicitly reports temporary assets; deletion 
   await f.call("delete_music_audio", { audioId: a.audioId });
   assert.equal((await f.call("get_music_audio", { audioId: a.audioId })).isError, true);
 });
+
+
+test("lost submission response is recorded as unknown and never blindly retried", async t => {
+  const f = await fixture(t, { unknownSubmission: true });
+  const first = await f.call("generate_music", generation);
+  assert.equal(first.structuredContent.status, "submission_unknown");
+  const again = await f.call("generate_music", generation);
+  assert.equal(again.structuredContent.jobId, first.structuredContent.jobId);
+  assert.equal(f.calls.filter(x => x.method === "POST" && x.url.endsWith("/v1/predictions")).length, 1);
+});
+test("concurrent duplicate submissions reserve one job before creating a prediction", async t => {
+  const f = await fixture(t);
+  const results = await Promise.all([f.call("generate_music", generation), f.call("generate_music", generation)]);
+  assert.equal(results[0].structuredContent.jobId, results[1].structuredContent.jobId);
+  assert.equal(f.predictions.size, 1);
+});
+test("per-user quota rejects the fourth active job without a paid submission", async t => {
+  const f = await fixture(t);
+  for (let i=0; i<3; i++) data(await f.call("generate_music", {...generation, requestKey: "quota-"+i}));
+  const fourth=await f.call("generate_music", {...generation, requestKey: "quota-four"});
+  assert.equal(fourth.isError, true); assert.match(fourth.structuredContent.error, /three active/);
+  assert.equal(f.predictions.size, 3);
+});

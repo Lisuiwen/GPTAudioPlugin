@@ -1,9 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import { build } from "esbuild";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 
 await mkdir("dist/server", { recursive: true });
 await mkdir("dist/.openai", { recursive: true });
+let sha = process.env.BUILD_SHA || "unknown";
+try { sha = execFileSync("git", ["rev-parse", "HEAD"], {encoding:"utf8"}).trim(); } catch {}
 await build({
+  define: { __BUILD_SHA__: JSON.stringify(sha) },
   entryPoints: ["src/worker.ts"],
   outfile: "dist/server/index.js",
   bundle: true,
