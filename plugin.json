@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.7.0",
-  "description": "Generate music and listen to attached audio for grounded music analysis through GPTAudioMCP.",
+  "version": "0.7.1",
+  "description": "Generate music with ACE-Step/MiniMax routing and listen to attached audio for grounded music analysis through GPTAudioMCP.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -19,8 +19,8 @@
     "com.openai": {
       "interface": {
         "displayName": "GPT Audio Plugin",
-        "shortDescription": "Generate music or analyze attached audio.",
-        "longDescription": "Stay in the normal ChatGPT conversation, attach audio when useful, and use GPTAudioMCP to either generate music or send the actual audio to a multimodal listening model for grounded critique and analysis through your connected Replicate account.",
+        "shortDescription": "Generate routed music or analyze attached audio.",
+        "longDescription": "GPTAudioMCP 0.7.1 routes new instrumental generation to ACE-Step 1.5 and vocal generation to MiniMax Music 2.6 by default, while keeping cover/reference/continuation routes explicit. It also sends actual attached or saved audio to a multimodal listening model for grounded critique and analysis through your connected Replicate account.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [

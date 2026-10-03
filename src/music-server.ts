@@ -14,12 +14,12 @@ export type MusicConnection = {
   runtime?: string;
   buildSha?: string;
 };
-export const SERVER_VERSION = "0.7.0";
+export const SERVER_VERSION = "0.7.1";
 export const TOOL_NAMES = ["get_music_provider_profile", "inspect_music_model", "generate_music", "analyze_music", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"];
 // The two metadata fields MUST be declared but must NOT be required.
 export const OpenAIFileSchema = z.object({ download_url: z.string().url(), file_id: z.string().min(1), mime_type: z.string().optional(), file_name: z.string().optional() }).strict();
 const provider = z.literal("replicate").default("replicate");
-const model = z.string().optional().describe('Replicate owner/name[:version]. Explicit selection overrides routing, not capability validation.');
+const model = z.string().optional().describe('Replicate owner/name[:version]. Omit it to use routing: new instrumental -> fishaudio/ace-step-1.5; new vocal -> minimax/music-2.6; cover/reference/continue use their dedicated routes. Explicit selection overrides routing, not capability validation.');
 const audioId = z.string().min(1).optional().describe("A service-issued audioId owned by the current user. Never invent one.");
 const requestKey = z.string().min(1).max(128).optional().describe("Reuse the same key when retrying this operation to prevent duplicate billable submissions; use a new key for a new version.");
 const range = { startSec: z.number().min(0).optional(), endSec: z.number().positive().optional() };
@@ -39,7 +39,7 @@ function failure(error: unknown) {
 export function createMusicServer(session: AuthSession | undefined, connection: MusicConnection): McpServer {
   const server = new McpServer({ name: "gpt-audio-mcp", version: SERVER_VERSION }, {
     jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
-    instructions: "Replicate-only music generation and listening. Use the current chat as the creative reasoning layer. Compile context into directorPrompt within the selected model's limit. Never invent file_id, audioId, jobId or model capabilities. With workflow storage, generate_music/analyze_music return a job: poll get_music_job until succeeded/failed/canceled. Retry the same requestKey after transport failures instead of paying for another generation. A registered audioId lets you reuse generated audio without re-upload. Segment analysis actually crops PCM WAV; unsupported compressed inputs fail explicitly. compare_music performs two independent listens using the same rubric; synthesize a comparison only from both completed results. Do not claim local editing or guaranteed looping. The user may use ChatGPT native files or previously returned audioIds.",
+    instructions: "GPTAudioMCP v0.7.1. Replicate-only music generation and listening. Use the current chat as the creative reasoning layer. Compile context into directorPrompt within the selected model's limit. Never invent file_id, audioId, jobId or model capabilities. With workflow storage, generate_music/analyze_music return a job: poll get_music_job until succeeded/failed/canceled. Retry the same requestKey after transport failures instead of paying for another generation. A registered audioId lets you reuse generated audio without re-upload. Segment analysis actually crops PCM WAV; unsupported compressed inputs fail explicitly. compare_music performs two independent listens using the same rubric; synthesize a comparison only from both completed results. Do not claim local editing or guaranteed looping. The user may use ChatGPT native files or previously returned audioIds.",
   });
   const metadata = (files: string[] = []) => ({ securitySchemes: connection.securitySchemes, ...(files.length ? { "openai/fileParams": files } : {}) });
   const read = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
@@ -48,8 +48,8 @@ export function createMusicServer(session: AuthSession | undefined, connection: 
   const workflow = () => { if (!connection.workflow) throw new Error("Persistent workflows are not configured on this runtime."); return connection.workflow; };
 
   server.registerTool("get_service_status", {
-    title: "Music service status", description: "Read deployed version, build SHA, all tools, default models and storage mode without creating a prediction.", inputSchema: {}, annotations: read, _meta: metadata(),
-  }, async () => reply({ version: SERVER_VERSION, buildSha: connection.buildSha || "unknown", runtime: connection.runtime || "node", tools: TOOL_NAMES, models: MODELS, persistentJobs: !!connection.workflow, durableAudio: !!connection.workflow?.assets.bucket, segmentFormats: ["PCM WAV", "IEEE-float WAV"], completionPersistence: "Outputs are imported when the completed job is polled. Poll before provider retention expires.", nativeFileContract: "download_url and file_id required; mime_type and file_name declared, optional" }));
+    title: "Music service status", description: "Read the deployed GPTAudioMCP version/schema revision, build SHA, all tools, routed default models and storage mode without creating a prediction.", inputSchema: {}, annotations: read, _meta: metadata(),
+  }, async () => reply({ version: SERVER_VERSION, schemaRevision: "music-tools-v071", buildSha: connection.buildSha || "unknown", runtime: connection.runtime || "node", tools: TOOL_NAMES, models: MODELS, persistentJobs: !!connection.workflow, durableAudio: !!connection.workflow?.assets.bucket, segmentFormats: ["PCM WAV", "IEEE-float WAV"], completionPersistence: "Outputs are imported when the completed job is polled. Poll before provider retention expires.", nativeFileContract: "download_url and file_id required; mime_type and file_name declared, optional" }));
 
   server.registerTool("get_music_provider_profile", {
     title: "Music provider profile", description: "Read the currently connected Replicate identity.", inputSchema: { provider }, annotations: read, _meta: { ...metadata(), "openai/profile": true },
@@ -64,13 +64,13 @@ export function createMusicServer(session: AuthSession | undefined, connection: 
     try { return reply(await getMusicProvider(args.provider).inspectModel(session!.replicateToken, args.model)); } catch (error) { return failure(error); }
   });
   server.registerTool("generate_music", {
-    title: "Generate or transform music", description: "Generate music through Replicate or use explicit cover/reference/continue intent. Returns audio immediately when complete, otherwise jobId; poll get_music_job. Cover is whole-song re-arrangement, not local editing. Do not attach audio in generate-only mode.",
+    title: "Generate or transform music", description: "GPTAudioMCP v0.7.1. Generate through Replicate with routing: new instrumental defaults to ACE-Step 1.5, new vocal defaults to MiniMax Music 2.6; cover/reference/continue use dedicated routes. The tool accepts requested duration up to 600 seconds and then validates the selected model's real limit. Returns audio immediately when complete, otherwise jobId; poll get_music_job.",
     inputSchema: {
       provider, model, requestKey,
       generationMode: z.enum(["auto", "generate", "cover", "reference", "continue"]).default("auto"),
       conversationSummary: z.string().min(1).max(10000),
       directorPrompt: z.string().min(1).max(10000).describe("Complete creative direction, already incorporating context. ACE-Step max 512 characters; MiniMax max 2000. Never truncate requirements silently."),
-      duration: z.number().positive().max(600).optional(),
+      duration: z.number().positive().max(600).optional().describe("Requested duration in seconds. MCP schema accepts up to 600 seconds; the selected model's actual duration capability is validated at runtime and unsupported duration is never silently clamped."),
       lyrics: z.string().max(4096).optional(), instrumental: z.boolean().optional(), autoLyrics: z.boolean().optional(),
       seed: z.number().int().optional(), audioFormat: z.enum(["mp3", "wav"]).default("mp3"),
       referenceAudio: OpenAIFileSchema.optional(), sourceAudioId: audioId,

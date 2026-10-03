@@ -1,4 +1,4 @@
-# GPTAudioPlugin / GPTAudioMCP 0.7
+# GPTAudioPlugin / GPTAudioMCP 0.7.1
 
 A UI-less ChatGPT/Sites MCP for **Replicate-only** music generation, audio listening and iterative reuse. ChatGPT supplies creative direction; the service executes validated model operations and stores user-owned jobs/audio references.
 
@@ -84,6 +84,12 @@ Full MP3 and other provider-supported audio still work for whole-file listening.
 Structured analysis is validated as `summary`, `observations`, `uncertainties`, and `suggestions`. Non-JSON model responses remain available as the raw `answer` with `structuredStatus: unavailable`; the server does not invent missing observations or confidence scores.
 
 `compare_music` submits two independent analyses. Its output is not a joint raw-audio comparison model result, and partial failures must be reported before drawing conclusions. It incurs two inference requests.
+
+## Registration/schema sanity check
+
+The v0.7.1 manifest is a cache-busting registration revision. A correctly refreshed ChatGPT tool catalog must expose `get_service_status`, `get_music_job`, `register_music_audio`, `compare_music` and the other workflow tools. Its `generate_music` schema accepts a requested duration up to 600 seconds and advertises ACE-Step 1.5 / MiniMax Music 2.6 routing. If ChatGPT still shows only four tools, a default 8-second duration, or a 30-second maximum, it is using the legacy v0.4 registration rather than this build.
+
+`npm run check:mcp -- <endpoint>` now fails if the published `generate_music` schema regresses to the old 30-second contract.
 
 ## Sites upgrade
 

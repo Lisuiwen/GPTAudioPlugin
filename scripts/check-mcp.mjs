@@ -15,6 +15,10 @@ try {
   console.log(JSON.stringify({ endpoint: endpoint.href, server, tools: names }, null, 2));
   assert.equal(server?.version, manifest.version, "MCP version differs from plugin version");
   assert.deepEqual(names, ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
+  const generate = tools.find((tool) => tool.name === "generate_music");
+  assert.equal(generate?.inputSchema?.properties?.duration?.maximum, 600, "generate_music duration schema regressed; stale v0.4 registrations used 30 seconds");
+  assert.deepEqual(generate?.inputSchema?.properties?.generationMode?.enum, ["auto", "generate", "cover", "reference", "continue"], "generate_music routing modes differ from the v0.7 contract");
+  assert.match(generate?.description || "", /v0\.7\.1/i, "generate_music description is missing the registration revision marker");
   const result = await client.callTool({ name: "get_music_provider_profile", arguments: {} });
   assert.equal(result.isError, true);
   assert.match(result._meta?.["mcp/www_authenticate"]?.[0] || "", /resource_metadata=/);
