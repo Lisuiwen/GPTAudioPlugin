@@ -675,8 +675,10 @@ test("Replicate listening cancellation uses real provider state and remains user
     (await f.call("cancel_music_job", { jobId: job.jobId }, "bob")).isError,
     true
   );
-  const canceled = data(await f.call("cancel_music_job", { jobId: job.jobId }));
-  assert.equal(canceled.status, "canceled");
+  const canceledResult = await f.call("cancel_music_job", { jobId: job.jobId });
+  assert.equal(canceledResult.isError, true);
+  assert.equal(canceledResult.structuredContent.status, "canceled");
+  assert.match(canceledResult.structuredContent.error, /Replicate task .* is canceled/);
   assert.equal(f.replicatePredictions.size, 1);
 });
 
