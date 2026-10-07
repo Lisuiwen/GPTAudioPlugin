@@ -21,7 +21,7 @@ const source = await readFile(new URL("../dist/server/index.js", import.meta.url
 const { default: worker } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 let sha = "unknown";
 try { sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch {}
-const env = { DB: local.db, AUDIO_BUCKET: local.bucket, AUTH_ENCRYPTION_KEY: key.trim(), BUILD_SHA: `${sha}:local-sites-harness` };
+const env = { DB: local.db, AUDIO_BUCKET: local.bucket, AUTH_ENCRYPTION_KEY: key.trim(), BUILD_SHA: `${sha}:local-sites-harness`, RUNWARE_API_KEY: process.env.RUNWARE_API_KEY };
 // This harness simulates the Sites gateway identity ONLY on loopback. It must
 // never be deployed publicly or bound to 0.0.0.0.
 const server = createServer(async (req, res) => {
