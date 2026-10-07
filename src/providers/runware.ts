@@ -314,8 +314,12 @@ export async function createRunwareTask(
 
   if (plan.sourceFile) {
     mediaUUID = await uploadMedia(apiKey, plan.sourceFile);
-    (input.inputs as Record<string, unknown> | undefined) ??= {};
-    (input.inputs as Record<string, unknown>).audio = mediaUUID;
+    const inputs =
+      input.inputs && typeof input.inputs === "object"
+        ? (input.inputs as Record<string, unknown>)
+        : {};
+    inputs.audio = mediaUUID;
+    input.inputs = inputs;
   } else if (plan.sourceUrl) {
     input.inputs = { audio: plan.sourceUrl };
   }
