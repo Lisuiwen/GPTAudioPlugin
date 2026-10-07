@@ -1,5 +1,5 @@
-export type MusicProviderId = "replicate";
-export type GenerationMode = "auto" | "generate" | "cover" | "reference" | "continue";
+export type MusicProviderId = "replicate" | "runware";
+export type GenerationMode = "auto" | "generate" | "cover" | "reference" | "repaint" | "continue";
 export type ModelCapabilities = {
   provider: MusicProviderId;
   model: string;
@@ -35,6 +35,9 @@ export type GenerateMusicInput = {
   referenceAudioName?: string;
   referenceAudioMimeType?: string;
   continuation?: boolean;
+  repaintingStart?: number;
+  repaintingEnd?: number;
+  strength?: number;
 };
 export type GenerateMusicResult = {
   provider: MusicProviderId;

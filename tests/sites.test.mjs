@@ -8,7 +8,7 @@ import test from "node:test";
 const source = await readFile(new URL("../dist/server/index.js", import.meta.url), "utf8");
 const { default: worker } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 const migration = await readFile(new URL("../drizzle/0000_swift_chronomancer.sql", import.meta.url), "utf8");
-const musicMigration = await readFile(new URL('../drizzle/0001_mute_quentin_quire.sql', import.meta.url), 'utf8');
+const musicMigration = await readFile(new URL("../drizzle/0001_mute_quentin_quire.sql", import.meta.url), "utf8");
 const origin = "https://gpt-audio.example";
 
 function fixture(t) {
@@ -18,18 +18,49 @@ function fixture(t) {
   t.after(() => db.close());
   const env = {
     AUTH_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
-    DB: { prepare(sql) { return { bind(...values) { return {
-      async first() { return db.prepare(sql).get(...values) || null; },
-      async run() { return db.prepare(sql).run(...values); },
-    }; } }; } },
+    RUNWARE_API_KEY: "test-runware-key",
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...values) {
+            return {
+              async first() {
+                return db.prepare(sql).get(...values) || null;
+              },
+              async run() {
+                return db.prepare(sql).run(...values);
+              },
+            };
+          },
+        };
+      },
+    },
   };
-  const rpc = (method, params = {}, userId) => worker.fetch(new Request(`${origin}/mcp`, {
-    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(userId ? { "oai-authenticated-user-id": userId } : {}) },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  }), env);
-  const form = (path, userId, fields = {}, requestOrigin = origin) => worker.fetch(new Request(`${origin}${path}`, {
-    method: "POST", headers: { origin: requestOrigin, ...(userId ? { "oai-authenticated-user-id": userId } : {}) }, body: new URLSearchParams(fields),
-  }), env);
+  const rpc = (method, params = {}, userId) =>
+    worker.fetch(
+      new Request(`${origin}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          ...(userId ? { "oai-authenticated-user-id": userId } : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      }),
+      env
+    );
+  const form = (path, userId, fields = {}, requestOrigin = origin) =>
+    worker.fetch(
+      new Request(`${origin}${path}`, {
+        method: "POST",
+        headers: {
+          origin: requestOrigin,
+          ...(userId ? { "oai-authenticated-user-id": userId } : {}),
+        },
+        body: new URLSearchParams(fields),
+      }),
+      env
+    );
   return { db, env, rpc, form };
 }
 
@@ -40,55 +71,197 @@ function mockProvider(t) {
     const request = input instanceof Request ? input : new Request(input, options);
     calls.push(request);
     const url = new URL(request.url);
-    if (url.pathname === "/v1/account") return Response.json({ username: "replicate-user", name: "Test User" });
-    if (["audio.example", "replicate.example"].includes(url.hostname)) return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
-    if (url.pathname.startsWith("/v1/models/")) return Response.json({ latest_version: { id: "test-version", openapi_schema: { components: { schemas: { Input: { properties: {
-      prompt: { type: "string" }, audio: { type: "string" }, duration: { type: "integer" }, generate_audio: { type: "boolean" },
-    }, required: ["prompt"] } } } } } });
-    if (url.pathname === "/v1/files") return Response.json({ urls: { get: "https://replicate.example/upload.mp3" } });
+
+    if (url.pathname === "/v1/account") {
+      return Response.json({ username: "replicate-user", name: "Test User" });
+    }
+    if (["audio.example", "replicate.example", "runware.example"].includes(url.hostname)) {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "audio/mpeg" },
+      });
+    }
+    if (url.pathname.startsWith("/v1/models/")) {
+      return Response.json({
+        latest_version: {
+          id: "test-version",
+          openapi_schema: {
+            components: {
+              schemas: {
+                Input: {
+                  properties: {
+                    prompt: { type: "string" },
+                    audio: { type: "string" },
+                    duration: { type: "integer" },
+                    generate_audio: { type: "boolean" },
+                  },
+                  required: ["prompt"],
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+    if (url.pathname === "/v1/files") {
+      return Response.json({ urls: { get: "https://replicate.example/upload.mp3" } });
+    }
     if (url.pathname === "/v1/predictions") {
       const { input: fields } = await request.clone().json();
-      return Response.json({ id: "test-prediction", status: "succeeded", output: fields.generate_audio === false ? "The recording contains a steady rhythmic pulse." : "https://replicate.example/generated.mp3" });
+      return Response.json({
+        id: "test-prediction",
+        status: "succeeded",
+        output:
+          fields.generate_audio === false
+            ? "The recording contains a steady rhythmic pulse."
+            : "https://replicate.example/generated.mp3",
+      });
+    }
+    if (url.hostname === "api.runware.ai" && url.pathname === "/v1") {
+      const tasks = await request.clone().json();
+      const task = tasks[0];
+      if (task.taskType === "mediaStorage" && task.operation === "upload") {
+        return Response.json({
+          data: [
+            {
+              taskType: "mediaStorage",
+              taskUUID: task.taskUUID,
+              operation: "upload",
+              mediaUUID: "989ba605-1449-4e1e-b462-cd83ec9c1a67",
+              mediaURL: "https://runware.example/source.mp3",
+            },
+          ],
+        });
+      }
+      if (task.taskType === "mediaStorage" && task.operation === "delete") {
+        return Response.json({
+          data: [
+            {
+              taskType: "mediaStorage",
+              taskUUID: task.taskUUID,
+              operation: "delete",
+              mediaUUID: task.media,
+            },
+          ],
+        });
+      }
+      if (task.taskType === "audioInference") {
+        return Response.json({
+          data: [
+            {
+              taskType: "audioInference",
+              taskUUID: task.taskUUID,
+              audioUUID: "a34c1ab4-54e3-4c70-9dba-8a88f52db8a1",
+              audioURL: "https://runware.example/generated.mp3",
+              cost: 0.0009,
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected Runware task: ${JSON.stringify(task)}`);
     }
     throw new Error(`Unexpected network request: ${request.url}`);
   };
-  t.after(() => { globalThis.fetch = original; });
+  t.after(() => {
+    globalThis.fetch = original;
+  });
   return calls;
 }
 
-test("Sites discovery exposes the full workflow toolset and protects calls without platform identity", async (t) => {
+test("Sites discovery exposes the full workflow toolset and protects user calls without platform identity", async (t) => {
   const f = fixture(t);
-  const init = await f.rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  const init = await f.rpc("initialize", {
+    protocolVersion: "2025-03-26",
+    capabilities: {},
+    clientInfo: { name: "test", version: "1" },
+  });
   assert.equal(init.status, 200);
-  assert.equal((await init.json()).result.serverInfo.version, "0.7.1");
+  assert.equal((await init.json()).result.serverInfo.version, "0.8.0");
   const listed = await f.rpc("tools/list");
-  const { result: { tools } } = await listed.json();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
+  const {
+    result: { tools },
+  } = await listed.json();
+  assert.deepEqual(
+    tools.map((tool) => tool.name).sort(),
+    [
+      "analyze_music",
+      "generate_music",
+      "get_music_provider_profile",
+      "inspect_music_model",
+      "get_service_status",
+      "register_music_audio",
+      "get_music_audio",
+      "delete_music_audio",
+      "get_music_job",
+      "cancel_music_job",
+      "compare_music",
+    ].sort()
+  );
   assert.ok(tools.every((tool) => tool._meta.securitySchemes[0].type === "noauth"));
-  assert.equal((await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} })).status, 401);
-  const absent = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-one");
+  assert.equal(
+    (
+      await f.rpc("tools/call", {
+        name: "get_music_provider_profile",
+        arguments: { provider: "replicate" },
+      })
+    ).status,
+    401
+  );
+  const absent = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "replicate" } },
+    "user-one"
+  );
   const { result } = await absent.json();
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /https:\/\/gpt-audio.example\/connect/);
   assert.equal(result._meta?.["mcp/www_authenticate"], undefined);
+
+  const runware = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "runware" } },
+    "user-one"
+  );
+  assert.equal((await runware.json()).result.structuredContent.configured, true);
 });
 
-test("Replicate credentials persist encrypted, remain user-scoped, and disconnect independently", async (t) => {
+test("Replicate listening credentials persist encrypted, remain user-scoped, and disconnect independently", async (t) => {
   const f = fixture(t);
   mockProvider(t);
-  assert.equal((await f.form("/connect", "user-one", { replicate_token: "private-token" })).status, 200);
-  const stored = f.db.prepare("SELECT * FROM replicate_connections WHERE user_id = ?").get("user-one");
+  assert.equal(
+    (await f.form("/connect", "user-one", { replicate_token: "private-token" })).status,
+    200
+  );
+  const stored = f.db
+    .prepare("SELECT * FROM replicate_connections WHERE user_id = ?")
+    .get("user-one");
   assert.equal(stored.username, "replicate-user");
   assert.ok(!stored.encrypted_token.includes("private-token"));
-  // A fresh request derives access from persistent storage, without an OAuth session in memory.
-  const profile = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-one");
+  const profile = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "replicate" } },
+    "user-one"
+  );
   assert.equal((await profile.json()).result.structuredContent.id, "user-one");
-  const other = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-two");
+  const other = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "replicate" } },
+    "user-two"
+  );
   assert.equal((await other.json()).result.isError, true);
-  assert.equal((await f.form("/connect", "user-two", { replicate_token: "second-token" })).status, 200);
+  assert.equal(
+    (await f.form("/connect", "user-two", { replicate_token: "second-token" })).status,
+    200
+  );
   assert.equal((await f.form("/disconnect", "user-one")).status, 200);
-  assert.equal(f.db.prepare("SELECT count(*) AS total FROM replicate_connections").get().total, 1);
-  const remaining = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-two");
+  assert.equal(
+    f.db.prepare("SELECT count(*) AS total FROM replicate_connections").get().total,
+    1
+  );
+  const remaining = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "replicate" } },
+    "user-two"
+  );
   assert.equal((await remaining.json()).result.structuredContent.id, "user-two");
 });
 
@@ -96,34 +269,98 @@ test("credential forms reject unauthenticated and cross-origin requests before c
   const f = fixture(t);
   const calls = mockProvider(t);
   assert.equal((await f.form("/connect", undefined, { replicate_token: "token" })).status, 401);
-  assert.equal((await f.form("/connect", "user-one", { replicate_token: "token" }, "https://untrusted.example")).status, 403);
-  assert.equal((await f.form("/connect", "user-one", { replicate_token: "x".repeat(10000) })).status, 400);
+  assert.equal(
+    (
+      await f.form(
+        "/connect",
+        "user-one",
+        { replicate_token: "token" },
+        "https://untrusted.example"
+      )
+    ).status,
+    403
+  );
+  assert.equal(
+    (await f.form("/connect", "user-one", { replicate_token: "x".repeat(10000) })).status,
+    400
+  );
   assert.equal(calls.length, 0);
-  const page = await worker.fetch(new Request(origin, { headers: { "oai-authenticated-user-id": "user-one" } }), f.env);
+  const page = await worker.fetch(
+    new Request(origin, { headers: { "oai-authenticated-user-id": "user-one" } }),
+    f.env
+  );
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type"), /charset=utf-8/);
+  assert.match(await page.text(), /Runware ACE-Step 1\.5/);
 });
 
-test("bundle generates and analyzes attached audio through the existing Replicate adapter", async (t) => {
+test("bundle generates through Runware and analyzes through the existing Replicate listener", async (t) => {
   const f = fixture(t);
   const calls = mockProvider(t);
   await f.form("/connect", "user-one", { replicate_token: "test-token" });
-  const audio = { download_url: "https://audio.example/reference.mp3", file_id: "file-one", mime_type: "audio/mpeg" };
-  const generated = await f.rpc("tools/call", { name: "generate_music", arguments: { model: "test/music", conversationSummary: "Test context", directorPrompt: "A quiet instrumental", referenceAudio: audio } }, "user-one");
+  const audio = {
+    download_url: "https://audio.example/reference.mp3",
+    file_id: "file-one",
+    mime_type: "audio/mpeg",
+  };
+
+  const generated = await f.rpc(
+    "tools/call",
+    {
+      name: "generate_music",
+      arguments: {
+        conversationSummary: "Test context",
+        directorPrompt: "A quiet instrumental arrangement preserving the source mood",
+        referenceAudio: audio,
+      },
+    },
+    "user-one"
+  );
   const generatedResult = (await generated.json()).result;
   assert.equal(generatedResult.isError, undefined, JSON.stringify(generatedResult));
-  assert.equal(generatedResult.structuredContent.audioUrl, "https://replicate.example/generated.mp3");
+  assert.equal(
+    generatedResult.structuredContent.audioUrl,
+    "https://runware.example/generated.mp3"
+  );
   assert.equal(generatedResult.structuredContent.referenceAudioUsed, true);
-  const analyzed = await f.rpc("tools/call", { name: "analyze_music", arguments: { model: "test/analysis", audio, question: "Describe the rhythm" } }, "user-one");
+  assert.equal(generatedResult.structuredContent.provider, "runware");
+  assert.equal(generatedResult.structuredContent.providerCostUsd, 0.0009);
+
+  const analyzed = await f.rpc(
+    "tools/call",
+    {
+      name: "analyze_music",
+      arguments: { model: "test/analysis", audio, question: "Describe the rhythm" },
+    },
+    "user-one"
+  );
   const analyzedResult = (await analyzed.json()).result;
   assert.equal(analyzedResult.isError, undefined, JSON.stringify(analyzedResult));
   assert.match(analyzedResult.structuredContent.answer, /rhythmic pulse/);
-  const predictions = calls.filter((request) => new URL(request.url).pathname === "/v1/predictions");
-  assert.equal(predictions.length, 2);
-  for (const request of predictions) {
-    assert.equal(request.headers.get("authorization"), "Bearer test-token");
-    assert.equal((await request.json()).input.audio, "https://replicate.example/upload.mp3");
+  assert.equal(analyzedResult.structuredContent.provider, "replicate");
+
+  const predictions = calls.filter(
+    (request) => new URL(request.url).pathname === "/v1/predictions"
+  );
+  assert.equal(predictions.length, 1);
+  assert.equal(predictions[0].headers.get("authorization"), "Bearer test-token");
+  assert.equal((await predictions[0].json()).input.audio, "https://replicate.example/upload.mp3");
+
+  const runwareCalls = calls.filter(
+    (request) => new URL(request.url).hostname === "api.runware.ai"
+  );
+  const inference = [];
+  for (const request of runwareCalls) {
+    const [task] = await request.clone().json();
+    if (task.taskType === "audioInference") inference.push({ request, task });
   }
+  assert.equal(inference.length, 1);
+  assert.equal(inference[0].request.headers.get("authorization"), "Bearer test-runware-key");
+  assert.equal(inference[0].task.model, "runware:ace-step@v1.5-xl-turbo");
+  assert.equal(
+    inference[0].task.inputs.audio,
+    "989ba605-1449-4e1e-b462-cd83ec9c1a67"
+  );
 });
 
 test("storage failure leaves discovery available and returns a recoverable error without credentials", async (t) => {
@@ -131,10 +368,21 @@ test("storage failure leaves discovery available and returns a recoverable error
   mockProvider(t);
   await f.form("/connect", "user-one", { replicate_token: "do-not-expose" });
   f.env.AUTH_ENCRYPTION_KEY = randomBytes(32).toString("base64");
-  const failed = await f.rpc("tools/call", { name: "get_music_provider_profile", arguments: {} }, "user-one");
+  const failed = await f.rpc(
+    "tools/call",
+    { name: "get_music_provider_profile", arguments: { provider: "replicate" } },
+    "user-one"
+  );
   assert.equal(failed.status, 503);
   assert.ok(!(await failed.text()).includes("do-not-expose"));
-  f.env.DB = { prepare() { throw new Error("storage unavailable"); } };
+  f.env.DB = {
+    prepare() {
+      throw new Error("storage unavailable");
+    },
+  };
   assert.equal((await f.rpc("tools/list")).status, 200);
-  assert.equal((await f.form("/connect", "user-one", { replicate_token: "do-not-expose" })).status, 503);
+  assert.equal(
+    (await f.form("/connect", "user-one", { replicate_token: "do-not-expose" })).status,
+    503
+  );
 });

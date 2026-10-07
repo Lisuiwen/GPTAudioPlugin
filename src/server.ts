@@ -13,7 +13,7 @@ const local = createLocalWorkflow(resolve(process.env.MUSIC_DATA_DIR || join(pro
 const port = Number(process.env.PORT ?? 8787);
 const baseUrl = getPublicBaseUrl(port);
 function authRequired() {
-  return { content: [{ type: "text" as const, text: "Connect your Replicate account to continue." }], _meta: { "mcp/www_authenticate": [oauthChallenge(baseUrl)] }, isError: true };
+  return { content: [{ type: "text" as const, text: "Connect Replicate to use listening/analysis." }], _meta: { "mcp/www_authenticate": [oauthChallenge(baseUrl)] }, isError: true };
 }
 const httpServer = createServer((req, res) => {
   handleRequest(req, res).catch(() => {
@@ -37,9 +37,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate");
     const session = authenticateRequest(req);
     if (req.headers.authorization && !session) {
-      res.writeHead(401, { "WWW-Authenticate": oauthChallenge(baseUrl).replace('error="insufficient_scope"', 'error="invalid_token"'), "content-type": "application/json" }).end(JSON.stringify({ error: "invalid_token", error_description: "Reconnect your Replicate account." })); return;
+      res.writeHead(401, { "WWW-Authenticate": oauthChallenge(baseUrl).replace('error="insufficient_scope"', 'error="invalid_token"'), "content-type": "application/json" }).end(JSON.stringify({ error: "invalid_token", error_description: "Reconnect your listening account." })); return;
     }
-    const server = createMusicServer(session, { securitySchemes: OAUTH_SECURITY, authRequired, workflow: local.workflow, runtime: "node", buildSha: process.env.BUILD_SHA });
+    const server = createMusicServer(session, { securitySchemes: OAUTH_SECURITY, authRequired, workflow: local.workflow, runtime: "node", buildSha: process.env.BUILD_SHA, ownerId: session?.profileId, runwareApiKey: process.env.RUNWARE_API_KEY });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => { void transport.close(); void server.close(); });
     try { await server.connect(transport); await transport.handleRequest(req, res); }

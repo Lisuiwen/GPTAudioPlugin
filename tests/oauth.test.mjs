@@ -105,7 +105,7 @@ test("SDK discovery lists all workflow tools and unauthenticated calls request O
   t.after(() => client.close());
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["analyze_music", "generate_music", "get_music_provider_profile", "inspect_music_model", "get_service_status", "register_music_audio", "get_music_audio", "delete_music_audio", "get_music_job", "cancel_music_job", "compare_music"].sort());
-  const result = await client.callTool({ name: "get_music_provider_profile", arguments: {} });
+  const result = await client.callTool({ name: "get_music_provider_profile", arguments: { provider: "replicate" } });
   assert.equal(result.isError, true);
   assert.match(result._meta["mcp/www_authenticate"][0], /resource_metadata=/);
 });
@@ -123,7 +123,7 @@ test("rotated OAuth tokens and credentials survive restart in a different workin
   const differentCwd = join(f.directory, "different-cwd");
   await mkdir(differentCwd);
   server = await f.start(differentCwd);
-  const profileResponse = await rpc(server.url, "tools/call", { name: "get_music_provider_profile", arguments: {} }, tokens.access_token);
+  const profileResponse = await rpc(server.url, "tools/call", { name: "get_music_provider_profile", arguments: { provider: "replicate" } }, tokens.access_token);
   assert.equal(profileResponse.status, 200);
   const profile = await profileResponse.json();
   assert.equal(profile.result.structuredContent.id, "test-profile");
@@ -177,7 +177,7 @@ test("legacy stores migrate without losing existing refresh tokens", async (t) =
   assert.deepEqual(migrated.authorizationCodes, {});
 });
 
-test("read-only OAuth scope cannot generate or analyze audio", async (t) => {
+test("read-only Replicate scope blocks listening while Runware generation authorization is independent", async (t) => {
   const f = await fixture(t);
   await seed(f.dataDir);
   const storePath = join(f.dataDir, "auth-store.json");
@@ -185,14 +185,40 @@ test("read-only OAuth scope cannot generate or analyze audio", async (t) => {
   store.accessTokens[hash("valid-access")].scope = "replicate.read";
   await writeFile(storePath, JSON.stringify(store), "utf8");
   const server = await f.start();
-  for (const [name, args] of [
-    ["generate_music", { conversationSummary: "test", directorPrompt: "test" }],
-    ["analyze_music", { audio: { download_url: "https://example.com/audio.mp3", file_id: "test" }, question: "test" }],
-  ]) {
-    const response = await rpc(server.url, "tools/call", { name, arguments: args }, "valid-access");
-    assert.equal(response.status, 200);
-    const { result } = await response.json();
-    assert.equal(result.isError, true);
-    assert.match(result._meta["mcp/www_authenticate"][0], /insufficient_scope/);
-  }
+
+  const generated = await rpc(
+    server.url,
+    "tools/call",
+    {
+      name: "generate_music",
+      arguments: {
+        conversationSummary: "test",
+        directorPrompt: "A quiet instrumental test piece",
+        duration: 30,
+      },
+    },
+    "valid-access"
+  );
+  assert.equal(generated.status, 200);
+  const generationResult = (await generated.json()).result;
+  assert.equal(generationResult.isError, true);
+  assert.match(generationResult.structuredContent.error, /Runware generation is not configured/);
+  assert.equal(generationResult._meta?.["mcp/www_authenticate"], undefined);
+
+  const analyzed = await rpc(
+    server.url,
+    "tools/call",
+    {
+      name: "analyze_music",
+      arguments: {
+        audio: { download_url: "https://example.com/audio.mp3", file_id: "test" },
+        question: "test",
+      },
+    },
+    "valid-access"
+  );
+  assert.equal(analyzed.status, 200);
+  const analysisResult = (await analyzed.json()).result;
+  assert.equal(analysisResult.isError, true);
+  assert.match(analysisResult._meta["mcp/www_authenticate"][0], /insufficient_scope/);
 });

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.7.1",
-  "description": "Generate music with ACE-Step/MiniMax routing and listen to attached audio for grounded music analysis through GPTAudioMCP.",
+  "version": "0.8.0",
+  "description": "Generate and edit music with hosted ACE-Step 1.5 on Runware, with Replicate-backed listening for grounded music analysis.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -13,14 +13,16 @@
     "music",
     "replicate",
     "chatgpt",
-    "mcp"
+    "mcp",
+    "runware",
+    "ace-step"
   ],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "GPT Audio Plugin",
-        "shortDescription": "Generate routed music or analyze attached audio.",
-        "longDescription": "GPTAudioMCP 0.7.1 routes new instrumental generation to ACE-Step 1.5 and vocal generation to MiniMax Music 2.6 by default, while keeping cover/reference/continuation routes explicit. It also sends actual attached or saved audio to a multimodal listening model for grounded critique and analysis through your connected Replicate account.",
+        "shortDescription": "Generate/edit with ACE-Step 1.5 or analyze attached audio.",
+        "longDescription": "GPTAudioMCP 0.8.0 routes music generation and reference-audio editing to hosted ACE-Step 1.5 on Runware (XL Turbo by default, XL Base available for higher-quality edits). Listening and critique remain on the connected Replicate audio model, so generation no longer requires a user Replicate credential.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [

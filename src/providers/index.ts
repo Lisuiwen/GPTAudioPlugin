@@ -1,4 +1,5 @@
 import { replicateProvider } from "./replicate.js";
+import { runwareProvider } from "./runware.js";
 import type {
   MusicProvider,
   MusicProviderId,
@@ -6,10 +7,11 @@ import type {
 
 const providers: Record<MusicProviderId, MusicProvider> = {
   replicate: replicateProvider,
+  runware: runwareProvider,
 };
 
-export const DEFAULT_PROVIDER_ID: MusicProviderId = "replicate";
-export const DEFAULT_MODEL = replicateProvider.defaultModel;
+export const DEFAULT_PROVIDER_ID: MusicProviderId = "runware";
+export const DEFAULT_MODEL = runwareProvider.defaultModel;
 export const DEFAULT_ANALYSIS_MODEL = replicateProvider.defaultAnalysisModel;
 
 export function getMusicProvider(

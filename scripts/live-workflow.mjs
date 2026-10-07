@@ -13,7 +13,7 @@ try { report = JSON.parse(await readFile(reportPath, "utf8")); }
 catch (error) { if (error.code !== "ENOENT") throw error; report = { runId: randomUUID(), endpoint: endpoint.href, events: [], startedAt: new Date().toISOString() }; }
 if (report.endpoint !== endpoint.href) throw new Error("Report belongs to a different endpoint. Choose a new MUSIC_LIVE_REPORT path.");
 const save = async () => { await mkdir(dirname(reportPath), { recursive: true }); await writeFile(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 }); };
-const client = new Client({ name: "gpt-audio-live-regression", version: "0.7.0" });
+const client = new Client({ name: "gpt-audio-live-regression", version: "0.8.0" });
 async function call(name, args = {}) {
   const response = await client.callTool({ name, arguments: args }, undefined, { timeout: 180000 });
   const data = response.structuredContent || JSON.parse(response.content?.[0]?.text || "{}");
@@ -37,14 +37,14 @@ try {
   report.tools = tools.map(t => t.name); report.service = await call("get_service_status");
   assert.equal(report.tools.length, 11);
   // Do not log identities, tokens, signed audio URLs, or uploaded file bodies.
-  const profile = await client.callTool({ name: "get_music_provider_profile", arguments: {} });
+  const profile = await client.callTool({ name: "get_music_provider_profile", arguments: { provider: "replicate" } });
   report.connected = !profile.isError;
   await save();
-  if (!report.connected) throw new Error("Replicate is not connected in this local test runtime. Enter the token privately at /connect; never paste it into chat.");
+  if (!report.service?.runwareConfigured) throw new Error("RUNWARE_API_KEY is not configured in this local test runtime.");\n  if (!report.connected) throw new Error("Replicate listening is not connected in this local test runtime. Enter the token privately at /connect; never paste it into chat.");
   if (!billable) {
     console.log("Discovery and connection checks passed. No predictions created. Add --billable for one short generation plus one cropped analysis.");
   } else {
-    const generationInput = { requestKey: `live-${report.runId}-generate`, conversationSummary: "End-to-end technical smoke test of a quiet island-game instrumental.", directorPrompt: "Instrumental, gentle ukulele and warm strings, relaxed island game background music, no vocals.", generationMode: "generate", instrumental: true, duration: 10, audioFormat: "wav" };
+    const generationInput = { requestKey: `live-${report.runId}-generate`, conversationSummary: "End-to-end technical smoke test of a quiet island-game instrumental.", directorPrompt: "Instrumental, gentle ukulele and warm strings, relaxed island game background music, no vocals.", generationMode: "generate", instrumental: true, duration: 30, audioFormat: "wav" };
     const submitted = await call("generate_music", generationInput);
     report.generationJobId = submitted.jobId; await save();
     const generated = await finished(submitted);
