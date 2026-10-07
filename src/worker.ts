@@ -5,19 +5,19 @@ import { AudioAssets, WorkflowStore, type AudioBucket } from "./workflow-store.j
 import { ConnectionInputError, connectReplicate, disconnectReplicate, readConnection, readSession, type SitesEnvironment } from "./sites-store.js";
 
 declare const __BUILD_SHA__: string;
-type Environment = SitesEnvironment & { AUDIO_BUCKET?: AudioBucket; BUILD_SHA?: string };
+type Environment = SitesEnvironment & { AUDIO_BUCKET?: AudioBucket; BUILD_SHA?: string; RUNWARE_API_KEY?: string };
 const buildSha = (env: Environment) => env.BUILD_SHA || (typeof __BUILD_SHA__ !== "undefined" ? __BUILD_SHA__ : "unknown");
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
-const services = (env: Environment) => { const store = new WorkflowStore(env.DB); return new MusicWorkflow(store, new AudioAssets(store, env.AUDIO_BUCKET)); };
+const services = (env: Environment) => { const store = new WorkflowStore(env.DB); return new MusicWorkflow(store, new AudioAssets(store, env.AUDIO_BUCKET), env.RUNWARE_API_KEY); };
 
 function connectionPage(username?: string): Response {
-  const status = username ? `已连接 Replicate 账号：${escapeHtml(username)}` : "连接 Replicate 后，即可在对话中生成音乐或分析音频。";
+  const status = username ? `已连接 Replicate 听音账号：${escapeHtml(username)}` : "音乐生成已切换到 Runware ACE-Step 1.5。只有听音/评价需要额外连接 Replicate。";
   return new Response(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GPT Audio · 账号连接</title>
 <style>body{font:16px/1.65 system-ui,sans-serif;background:#0c1220;color:#e7edf9;margin:0;padding:32px 20px}main{max-width:560px;margin:8vh auto}h1{font-size:28px}a{color:#8eb8ff}label{display:block;margin:24px 0 8px}input{box-sizing:border-box;width:100%;padding:12px;background:#172239;color:inherit;border:1px solid #7182a0;border-radius:6px;font:inherit}button{padding:11px 18px;background:#a1c1ff;color:#111d34;border:0;border-radius:6px;font:inherit;cursor:pointer;margin-top:16px}button:disabled{opacity:.6}#message{min-height:26px;color:#ffb8b8}.secondary{background:#24324c;color:#e7edf9}</style></head>
-<body><main><h1>GPT Audio</h1><p>${status}</p><p>在 <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noopener noreferrer">Replicate API 令牌页面</a>获取令牌。只在此页面输入，请勿发送到对话中。</p>
-<form action="/connect" method="post"><label for="token">Replicate API 令牌</label><input id="token" name="replicate_token" type="password" required maxlength="4096" autocomplete="off"><button type="submit">${username ? "更新连接" : "连接 Replicate"}</button></form>
+<body><main><h1>GPT Audio</h1><p>${status}</p><p>Runware 生成凭据由部署端管理，无需在这里输入。若要使用听音/评价功能，可在 <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noopener noreferrer">Replicate API 令牌页面</a>获取令牌。只在此页面输入，请勿发送到对话中。</p>
+<form action="/connect" method="post"><label for="token">Replicate API 令牌（仅用于听音/评价）</label><input id="token" name="replicate_token" type="password" required maxlength="4096" autocomplete="off"><button type="submit">${username ? "更新听音连接" : "连接 Replicate 听音"}</button></form>
 ${username ? '<button id="disconnect" class="secondary">断开 Replicate 连接</button>' : ""}<p id="message" role="status" aria-live="polite"></p><p>完成连接后，回到 GPT 桌面端的插件中调用音乐工具。</p></main>
 <script>async function submit(path,body){const buttons=document.querySelectorAll('button');buttons.forEach(b=>b.disabled=true);document.getElementById('message').textContent='正在处理…';try{const response=await fetch(path,{method:'POST',body,credentials:'same-origin'});const result=await response.json();if(!response.ok)throw new Error(result.message||'操作失败，请稍后重试。');location.reload()}catch(error){document.getElementById('message').textContent=error.message;buttons.forEach(b=>b.disabled=false)}}document.querySelector('form').addEventListener('submit',event=>{event.preventDefault();submit('/connect',new URLSearchParams(new FormData(event.target)))});document.getElementById('disconnect')?.addEventListener('click',()=>submit('/disconnect',new URLSearchParams()));</script></body></html>`, {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" },
@@ -75,8 +75,8 @@ async function handle(request: Request, env: Environment): Promise<Response> {
     const session = isToolCall ? await readSession(env, userId!) : undefined;
     const server = createMusicServer(session, {
       securitySchemes: [{ type: "noauth" }],
-      authRequired: () => ({ content: [{ type: "text", text: `Connect your Replicate account at ${url.origin}/connect, then retry this tool.` }], isError: true }),
-      workflow: services(env), runtime: "sites", buildSha: buildSha(env),
+      authRequired: () => ({ content: [{ type: "text", text: `Connect Replicate at ${url.origin}/connect only for listening/analysis, then retry this tool.` }], isError: true }),
+      workflow: services(env), runtime: "sites", buildSha: buildSha(env), ownerId: userId || undefined, runwareApiKey: env.RUNWARE_API_KEY,
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try { await server.connect(transport); return await transport.handleRequest(request, { parsedBody: rpc }); }
