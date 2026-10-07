@@ -42,5 +42,5 @@ export function createLocalWorkflow(directory: string) {
     async delete(key) { await rm(filePath(key), { force: true }); },
   };
   const store = new WorkflowStore(db);
-  return { db, bucket, workflow: new MusicWorkflow(store, new AudioAssets(store, bucket)), close: () => sqlite.close() };
+  return { db, bucket, workflow: new MusicWorkflow(store, new AudioAssets(store, bucket), process.env.RUNWARE_API_KEY), close: () => sqlite.close() };
 }
