@@ -1,99 +1,138 @@
-# GPTAudioPlugin / GPTAudioMCP 0.7.1
+# GPTAudioPlugin / GPTAudioMCP 0.8.0
 
-A UI-less ChatGPT/Sites MCP for **Replicate-only** music generation, audio listening and iterative reuse. ChatGPT supplies creative direction; the service executes validated model operations and stores user-owned jobs/audio references.
+A UI-less ChatGPT/Sites MCP for **hosted ACE-Step 1.5 music generation/editing on Runware** plus grounded audio listening on Replicate. ChatGPT supplies creative direction; the service validates provider capabilities, executes billable operations, and stores user-owned jobs/audio references.
 
 ## Architecture
 
 ```text
 ChatGPT / Codex
-  -> Sites gateway OAuth + trusted user identity
+  -> Sites gateway + trusted user identity
   -> src/worker.ts
-  -> src/music-server.ts (shared tool contract)
-  -> Replicate prediction
-  -> get_music_job -> persisted audioId -> analyze_music / next generation
+  -> src/music-server.ts
+       |-> Runware ACE-Step 1.5 XL Turbo / XL Base (generation + audio editing)
+       |-> Replicate Qwen audio model (listening / critique)
+  -> persistent workflow
+  -> audioId reuse -> listen / edit again
 ```
 
-The Node entry `src/server.ts` keeps the existing local OAuth flow and uses the same tools. Sites never imports the Node HTTP, filesystem or SQLite modules. Node 22.13+ is required for the local SQLite adapter.
+The Node entry `src/server.ts` keeps the existing local OAuth flow and uses the same tool contract. Sites never imports Node HTTP/filesystem/SQLite modules. Node 22.13+ is required for the local SQLite adapter.
+
+## Provider split
+
+| Intent | Provider / model |
+| --- | --- |
+| New music | Runware `runware:ace-step@v1.5-xl-turbo` |
+| Reference-audio transformation / cover | Runware ACE-Step 1.5 XL Turbo |
+| Localized repaint | Runware ACE-Step 1.5 XL Turbo |
+| Continuation / extension | Runware ACE-Step 1.5 XL Turbo |
+| Higher-quality slower edit | Runware `runware:ace-step@v1.5-xl-base` |
+| Listening / critique | Replicate `lucataco/qwen2.5-omni-7b` |
+
+Runware generation credentials are deployment-side: set `RUNWARE_API_KEY`. Users no longer need to connect Replicate to generate music. The existing encrypted Replicate connection is retained only for listening/analysis.
+
+The hosted Runware ACE-Step schema currently exposes text/audio generation, source-audio strength, and repaint/extension ranges. The XL Base model description mentions `extract`, `lego`, and `complete`, but those task selectors are not exposed by the current public hosted schema, so GPTAudioMCP 0.8.0 does **not** claim those operations.
 
 ## Tools
 
 | Tool | Behavior |
 | --- | --- |
-| `get_service_status` | Version, build SHA, exact tool list, default models and storage/segment capabilities. No prediction. |
-| `get_music_provider_profile` | Connected Replicate identity. |
-| `inspect_music_model` | Actual model schema, exact audio field, mode and prompt/duration limits. No prediction. |
-| `generate_music` | Generate, cover, melody-reference or continue; returns a job or completed result. |
-| `analyze_music` | Listen to an attachment or audioId; optionally crop a PCM WAV range. |
-| `get_music_job` | Poll an existing prediction and import completed outputs. Never regenerates. |
-| `cancel_music_job` | Request cancellation and report actual provider state, not a zero-cost guarantee. |
-| `register_music_audio` | Register an attachment as a user-owned audioId. |
+| `get_service_status` | Version, build SHA, providers/models, storage mode and runtime configuration. |
+| `get_music_provider_profile` | Runware deployment status or connected Replicate listening identity. |
+| `inspect_music_model` | Read Runware hosted capability contract or live Replicate schema. |
+| `generate_music` | Generate or transform music with Runware ACE-Step 1.5. |
+| `analyze_music` | Listen to an attachment/audioId through Replicate; optional PCM WAV range crop. |
+| `get_music_job` | Reconcile/poll an existing provider task and import completed output. Never regenerates. |
+| `cancel_music_job` | Cancel where supported. Runware audio inference has no server-side cancellation. |
+| `register_music_audio` | Register a native attachment as a reusable user-owned audioId. |
 | `get_music_audio` | Read asset metadata and parent/version lineage. |
-| `delete_music_audio` | Delete owned saved bytes/metadata only on an explicit user request. |
-| `compare_music` | Two independent billable listens with the same rubric, then ChatGPT synthesizes the comparison. |
+| `delete_music_audio` | Delete owned service bytes/metadata on explicit request. |
+| `compare_music` | Two independent Replicate listens using the same rubric, then ChatGPT synthesizes. |
 
-File parameters declare all four native properties: `download_url` and `file_id` are required; `mime_type` and `file_name` are declared but optional. Never fabricate a ChatGPT file ID for generated audio: use the returned service `audioId` instead.
+Native file parameters declare `download_url` and `file_id` as required; `mime_type` and `file_name` are optional. Never invent a ChatGPT file ID for generated audio: reuse the returned service `audioId`.
 
-## Model routing
+## Runware generation contract
 
-| Intent | Default Replicate model |
-| --- | --- |
-| New instrumental/BGM | `fishaudio/ace-step-1.5` |
-| New vocal song (`instrumental=false`) | `minimax/music-2.6` |
-| Explicit whole-song cover | `minimax/music-cover` |
-| Melody reference / continuation | `meta/musicgen` (pinned original version) |
-| Listening | `lucataco/qwen2.5-omni-7b` |
+`generationMode` is:
 
-`generationMode` is `auto | generate | cover | reference | continue`. An explicit `model` overrides model selection, not validation. Auto with a source defaults to melody reference, not cover merely because vocals were requested. Cover must reflect the user's actual intent and source compatibility.
+```text
+auto | generate | cover | reference | repaint | continue
+```
 
-The ACE-Step and MiniMax 2.6 Replicate deployments do **not** expose reference audio. Cover uses `audio_url`, never `bitrate` or `prompt`. Discovery no longer infers file inputs from prose descriptions.
+For **new generation**, hosted Runware ACE-Step currently accepts 30–300 seconds. For requests with source audio, Runware does not accept `duration`; use `repaintingStart` / `repaintingEnd` to define a replacement or extension. Values beyond the source duration can append audio; negative repaint starts can prepend audio.
 
-Generation accepts `lyrics`, `instrumental`, `autoLyrics`, `seed`, `audioFormat`, optional `duration`, `sourceAudioId` or native `referenceAudio`. All creative requirements must already be compiled into `directorPrompt` (ACE-Step: 512 characters; MiniMax: 2000). The raw conversation summary is not appended to exceed that budget. Overlong prompts/lyrics and incompatible inputs fail instead of being silently truncated. Models without a duration field return a warning that the requested duration was not applied.
+Relevant inputs:
 
-`get_service_status` reports defaults actually used. Node environment variables can override defaults; the current Sites Worker uses compiled defaults or explicit per-call model selection. Merely setting a Sites environment variable does not currently override the module's model defaults.
+- `directorPrompt`: 2–3000 characters
+- `lyrics`: up to 3000 characters
+- `instrumental` / `autoLyrics`
+- `seed`
+- `audioFormat`: MP3 or WAV through the MCP tool
+- `referenceAudio` or `sourceAudioId`
+- `strength`: 0–1 source influence
+- `repaintingStart`, `repaintingEnd`
 
-## Reusable workflow
+XL Turbo is the default because it is materially faster/cheaper. Select XL Base explicitly when quality is more important than latency/cost.
 
-1. Call `generate_music` with a stable `requestKey` for this operation.
-2. Save `jobId`. Poll `get_music_job` using `pollAfterSeconds` until a terminal state.
-3. A completed generation returns `audioId`/`audioIds`, model version and effective prompt.
-4. Call `analyze_music(audioId, question)` directly. No download/re-upload to ChatGPT.
-5. Call another generation with `sourceAudioId`; the result records its parent audio ID.
+Every Runware task sends `includeCost: true`; completed generation results may therefore include `providerCostUsd`.
 
-A repeated request key with the same input reuses the existing job; changed inputs with the same key are rejected. At most three active/unreconciled jobs are accepted per user. An ambiguous network failure during submission returns `submission_unknown`: reconcile the provider outcome instead of blindly submitting again. This is not a claim of exactly-once behavior across an external API/database failure.
+## Billing/idempotency safeguards
 
-Completed audio import is retryable via `storage_pending`; polling retries storage, not generation. Remote predictions receive a ten-minute cancellation deadline. HTTP wait timeouts are separate from cancellation confirmation.
+1. Supply a stable `requestKey` for each logical operation.
+2. Repeating the same key + same inputs returns the existing job.
+3. Reusing a key with changed inputs fails before a new billable request.
+4. The Runware `taskUUID` is persisted **before** the network submission.
+5. If the submission response is lost, the job becomes `submission_unknown`; `get_music_job` reconciles that UUID with Runware instead of blindly resubmitting.
+6. If generation finished but audio import failed, `storage_pending` retries storage from the existing provider output without generating again.
 
-## Audio storage and retention
+At most three active/unreconciled jobs are accepted per user.
 
-Sites jobs and metadata use D1 table `music_records`; credentials remain in the existing separately encrypted `replicate_connections` table. All lookups, request keys and parent IDs are user-scoped. Optimistic record revisions protect concurrent updates.
+Runware does not currently provide a server-side cancellation mechanism for these audio inference calls. `cancel_music_job` therefore never claims that stopping the client wait stops Runware billing.
 
-The Worker accepts an optional R2-compatible binding named **`AUDIO_BUCKET`**. With it, completed audio bytes are stored under user-scoped opaque object keys. Without it, the API explicitly returns `storage: temporary` and keeps only the provider/source URL, not a durable copy.
+## Audio reuse and listening
 
-**This branch does not provision object storage automatically.** Existing `.openai/hosting.json` keeps the original project ID/D1 binding and `r2: null`. Configure the appropriate platform-managed bucket/binding before claiming cloud audio persistence. `get_service_status.durableAudio` is the runtime truth. The local test harness uses a real filesystem object store.
+A completed generation returns `audioId` / `audioIds`. Pass an `audioId` directly to `analyze_music` or into another generation/edit request; no ChatGPT re-upload is required.
 
-Replicate API outputs are normally retained for one hour. This version imports outputs when the completed job is polled; it does not install a background webhook or scheduled sweeper. Poll completed jobs before provider retention expires. Unattended completion capture, storage quotas/retention schedules and automated submission reconciliation are follow-up work, not implemented promises.
+`startSec` / `endSec` perform real sample-aligned slicing for **PCM or IEEE-float WAV** before listening. Full MP3 and other provider-supported formats can still be analyzed as whole files, but compressed segment slicing fails explicitly rather than silently analyzing the wrong range.
 
-Authenticated `GET /audio/{audioId}` serves saved audio through the Sites identity boundary. It is not a public shared link. Explicit deletion removes the service copy, not the original ChatGPT attachment or Replicate prediction.
+Structured analysis is validated as:
 
-## Listening and comparison boundaries
+```json
+{
+  "summary": "...",
+  "observations": [],
+  "uncertainties": [],
+  "suggestions": []
+}
+```
 
-`startSec`/`endSec` perform real sample-aligned slicing for **PCM or IEEE-float WAV**. The supplied range is validated against file length and returned as `analyzedRange`.
+Non-JSON model output remains available as raw `answer` with `structuredStatus: unavailable`; the server does not fabricate observations or confidence.
 
-Full MP3 and other provider-supported audio still work for whole-file listening. Compressed MP3/M4A segment requests currently fail clearly and request conversion to WAV; they never silently analyze the whole song. Request `audioFormat: wav` when generating material for a subsequent segment test.
+## Storage and retention
 
-Structured analysis is validated as `summary`, `observations`, `uncertainties`, and `suggestions`. Non-JSON model responses remain available as the raw `answer` with `structuredStatus: unavailable`; the server does not invent missing observations or confidence scores.
+Sites jobs/audio metadata use D1 table `music_records`; encrypted Replicate listening credentials remain in `replicate_connections`.
 
-`compare_music` submits two independent analyses. Its output is not a joint raw-audio comparison model result, and partial failures must be reported before drawing conclusions. It incurs two inference requests.
+The Worker accepts an optional R2-compatible `AUDIO_BUCKET` binding. With it, audio bytes are stored under user-scoped opaque keys. Without it, records explicitly report `storage: temporary` and retain only the provider/source URL.
 
-## Registration/schema sanity check
+Runware generated URLs are normally available for seven days by default; Replicate outputs have shorter retention. Configure `AUDIO_BUCKET` before claiming durable cloud audio persistence. `get_service_status.durableAudio` is the runtime truth.
 
-The v0.7.1 manifest is a cache-busting registration revision. A correctly refreshed ChatGPT tool catalog must expose `get_service_status`, `get_music_job`, `register_music_audio`, `compare_music` and the other workflow tools. Its `generate_music` schema accepts a requested duration up to 600 seconds and advertises ACE-Step 1.5 / MiniMax Music 2.6 routing. If ChatGPT still shows only four tools, a default 8-second duration, or a 30-second maximum, it is using the legacy v0.4 registration rather than this build.
+Authenticated `GET /audio/{audioId}` serves saved audio through the Sites identity boundary. Explicit deletion removes the service copy, not the original ChatGPT attachment or provider task.
 
-`npm run check:mcp -- <endpoint>` now fails if the published `generate_music` schema regresses to the old 30-second contract.
+## Configuration
 
-## Sites upgrade
+```dotenv
+RUNWARE_API_KEY=...
+RUNWARE_MODEL=runware:ace-step@v1.5-xl-turbo
+RUNWARE_ADVANCED_MODEL=runware:ace-step@v1.5-xl-base
 
-Keep the same Sites project and `AUTH_ENCRYPTION_KEY`; do not create a replacement site or overwrite the original credential migration. Apply the new migration `drizzle/0001_mute_quentin_quire.sql` using the platform migration mechanism before serving workflow calls. The generated Drizzle snapshot and journal are checked in. Migration 0000 is unchanged.
+# Listening only
+REPLICATE_ANALYSIS_MODEL=lucataco/qwen2.5-omni-7b
+```
+
+Never commit provider credentials.
+
+For Sites, keep the existing project, D1 binding and `AUTH_ENCRYPTION_KEY`. Add `RUNWARE_API_KEY` as a deployment secret. The current `.openai/hosting.json` still has `r2: null`, so object storage is not automatically provisioned.
+
+## Build and verification
 
 ```powershell
 npm ci
@@ -101,48 +140,59 @@ npm run typecheck
 npm test
 ```
 
-`npm run build` builds Node and a browser-only Worker at `dist/server/index.js`. The Worker build includes the source Git SHA. Use the existing desktop Sites deployment workflow to publish the build, then verify `get_service_status` and `tools/list`. Updating GitHub alone does not update the live Sites runtime or the current conversation's tool catalog.
+`npm run build` builds the Node service plus the browser-only Sites Worker at `dist/server/index.js`. The Worker includes the source Git SHA.
 
-The Worker trusts `oai-authenticated-user-id` **only behind the Sites authentication gateway**. Never expose the Worker directly with a caller-controlled identity header. Existing per-user token encryption and connection form origin checks are retained. Audio downloads are bounded and reject local/numeric destinations; a production network egress policy is still needed for comprehensive SSRF/DNS-rebinding protection.
+`npm run check:mcp -- <endpoint>` verifies the v0.8.0 tool catalog, the 300-second hosted Runware generation ceiling, the new `repaint` mode and the Replicate OAuth challenge without running a billable inference.
 
-## Brook / local end-to-end debugging
+Updating GitHub alone does **not** update the live Sites runtime. Publish the build with the existing desktop Sites deployment workflow, then verify `get_service_status` reports:
 
-Do not disturb an existing working checkout. Use an independent Git worktree. After installing/building:
+- version `0.8.0`
+- `providers.generation = runware`
+- `runwareConfigured = true`
+
+## Local end-to-end debugging
+
+Use a separate worktree rather than disturbing a working checkout.
 
 ```powershell
-# Real compiled Sites Worker + local SQLite/object storage, loopback only.
+$env:RUNWARE_API_KEY="..."
 node scripts/debug-site.mjs
 ```
 
-Open `http://127.0.0.1:8797/connect` and connect Replicate **privately on that page**. The cloud connection is not copied into local tests. Never paste a token into chat or commit `.env`, encryption keys, databases or reports. The harness rejects foreign Host/Origin values and must never be published as a public gateway.
+Open `http://127.0.0.1:8797/connect` only if you also want Replicate listening. Never paste provider tokens into chat.
 
-In another terminal:
+Then:
 
 ```powershell
-# No billable predictions: schema discovery, deployment metadata and connection.
+# Discovery only, no billable inference
 node scripts/live-workflow.mjs
 
-# Explicitly billable: one 10-second WAV generation and one 0-4s listening test.
+# Billable: one 30-second Runware WAV generation + one cropped Replicate listen
 node scripts/live-workflow.mjs --billable
 ```
 
-The real test uses MCP SDK calls, stable request keys, polling, audioId reuse and a duplicate-submit assertion. It resumes from `.data/live-workflow-report.json` instead of blindly repeating generation. Override `MCP_URL`, `MUSIC_LIVE_REPORT`, `MUSIC_DEBUG_PORT` or `MUSIC_DEBUG_DIR` as needed. Do not point the debug harness at a public interface.
-
-Automated `npm test` exercises the **actual Sites bundle**, real SQLite/filesystem storage, OAuth regressions, ownership isolation, retries, genuine WAV cropping and model mappings with mocked external HTTP. Passing those tests does not by itself prove live Replicate inference or ChatGPT desktop UI behavior; record live-test results separately.
+The live test uses stable request keys, `audioId` reuse and duplicate-submit checks. It resumes from `.data/live-workflow-report.json` rather than blindly repeating generation.
 
 ## Source layout
 
 ```text
-src/music-server.ts          shared MCP tools
-src/music-workflow.ts        persistent prediction workflow
+src/music-server.ts          MCP tool contract / provider split
+src/music-workflow.ts        persistent cross-provider workflow
 src/workflow-store.ts        user-owned job/audio records
-src/audio.ts                 bounded download + WAV slicing
-src/providers/replicate.ts   validated model plans and provider operations
-src/replicate-transport.ts   HTTP and remote prediction deadlines
+src/audio.ts                 bounded downloads + WAV slicing
+src/providers/runware.ts     hosted ACE-Step 1.5 generation/editing
+src/providers/replicate.ts   listening model + legacy schema utilities
+src/replicate-transport.ts   Replicate prediction transport
 src/worker.ts                Sites authenticated entry
-src/sites-store.ts           existing encrypted credential store
-src/server.ts               Node OAuth entry
-src/node-workflow.ts        local SQLite/filesystem adapters
+src/sites-store.ts           encrypted Replicate listening connection store
+src/server.ts                Node OAuth entry
+src/node-workflow.ts         local SQLite/filesystem adapters
 scripts/debug-site.mjs       loopback Sites harness
 scripts/live-workflow.mjs    resumable opt-in live test
 ```
+
+## Security boundary
+
+The Worker trusts `oai-authenticated-user-id` **only behind the Sites authentication gateway**. Never expose the Worker directly with a caller-controlled identity header.
+
+Existing per-user Replicate token encryption and connection form origin checks are retained. Audio downloads are bounded and reject local/numeric destinations; production should still enforce outbound-network policy for comprehensive SSRF/DNS-rebinding protection.
