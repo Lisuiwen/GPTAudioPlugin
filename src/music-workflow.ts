@@ -165,14 +165,15 @@ export class MusicWorkflow {
         if (!this.runwareApiKey?.trim()) {
           throw new Error("Runware generation is not configured on this deployment.");
         }
-        plan = prepareRunwareGeneration({
+        const runwarePlan = prepareRunwareGeneration({
           ...(request as GenerateMusicInput),
           referenceAudioFile: file,
         });
+        plan = runwarePlan;
         job.provider = "runware";
         // Persist the Runware task UUID before the network call so an ambiguous
         // response can be reconciled with getTaskDetails instead of resubmitted.
-        job.predictionId = plan.taskUUID;
+        job.predictionId = runwarePlan.taskUUID;
       } else {
         if (!replicateToken?.trim()) {
           throw new Error("Connect Replicate before using audio listening/analysis.");
