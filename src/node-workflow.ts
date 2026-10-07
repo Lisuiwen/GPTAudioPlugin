@@ -12,7 +12,7 @@ export const MUSIC_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS music_records (
  updated_at INTEGER NOT NULL, PRIMARY KEY(user_id,id), UNIQUE(user_id,request_key)
 );`;
 
-export function createLocalWorkflow(directory: string) {
+export function createLocalWorkflow(directory: string, runwareApiKey = process.env.RUNWARE_API_KEY) {
   const root = resolve(directory);
   mkdirSync(root, { recursive: true });
   const sqlite = new DatabaseSync(join(root, "music.sqlite"));
@@ -42,5 +42,5 @@ export function createLocalWorkflow(directory: string) {
     async delete(key) { await rm(filePath(key), { force: true }); },
   };
   const store = new WorkflowStore(db);
-  return { db, bucket, workflow: new MusicWorkflow(store, new AudioAssets(store, bucket), process.env.RUNWARE_API_KEY), close: () => sqlite.close() };
+  return { db, bucket, workflow: new MusicWorkflow(store, new AudioAssets(store, bucket), runwareApiKey), close: () => sqlite.close() };
 }
