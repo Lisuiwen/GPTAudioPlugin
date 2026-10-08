@@ -1,6 +1,6 @@
-# GPTAudioMCP 0.9.0
+# GPTAudioMCP 0.10.0
 
-GPTAudioMCP is a Site-hosted MCP service for music generation and source-audio editing with Runware ACE-Step 1.5. The Site manages one Runware API key. Users do not enter a personal provider token.
+GPTAudioMCP is a Site-hosted MCP service for music generation and source-audio editing with Runware ACE-Step 1.5, plus listening critique through Runware Gemini 3.8 Flash. The Site manages one Runware API key. Users do not enter a personal provider token.
 
 ## What it does
 
@@ -9,7 +9,8 @@ GPTAudioMCP is a Site-hosted MCP service for music generation and source-audio e
 | New music | Runware ACE-Step 1.5 XL Turbo by default |
 | Cover, reference, repaint or continuation | Runware ACE-Step 1.5 XL Turbo |
 | Higher-quality, slower edit | Runware ACE-Step 1.5 XL Base |
-| Listen to or compare finished songs | Temporarily unavailable |
+| Listen to a finished song | Runware Gemini 3.8 Flash |
+| Compare two finished songs | Two independent Gemini 3.8 Flash listens with the same rubric |
 
 Runware accepts 30–300 seconds for new generation. Source-audio requests do not accept duration; repaintingStart and repaintingEnd specify the edited or extended range. Runware does not provide server-side cancellation for an in-flight audio task. Stopping a client wait does not stop billing.
 
@@ -20,13 +21,17 @@ Runware accepts 30–300 seconds for new generation. Source-audio requests do no
 | get_service_status | Read version, build SHA, Runware configuration and storage status. |
 | inspect_music_model | Read hosted model capabilities without inference. |
 | generate_music | Generate or edit music; this is billable. |
-| get_music_job | Check or reconcile a submitted job without regenerating. |
+| analyze_music | Listen to an attachment or saved audioId; this is billable. |
+| compare_music | Analyze two saved audioIds with the same rubric; this makes two billable calls. |
+| get_music_job | Read a submitted job; ACE-Step generation can be reconciled by task UUID. |
 | cancel_music_job | Read a finished result or report Runware's cancellation limit. |
 | register_music_audio | Register an attachment for reuse by audioId. |
 | get_music_audio | Read owner-scoped audio metadata. |
 | delete_music_audio | Delete an owner-scoped audio record and stored bytes. |
 
-New generation uses the deployment secret RUNWARE_API_KEY. The default model is runware:ace-step@v1.5-xl-turbo; runware:ace-step@v1.5-xl-base is available for slower, higher-quality edits. No user-facing connection or token form is exposed. The old /connect URL shows the read-only service page.
+Generation and listening use the deployment secret RUNWARE_API_KEY. The default music model is runware:ace-step@v1.5-xl-turbo; runware:ace-step@v1.5-xl-base is available for slower, higher-quality edits. Listening uses google:gemini@3.8-flash through Runware's OpenAI-compatible endpoint. No user-facing connection or token form is exposed. The old /connect URL shows the read-only service page.
+
+Listening accepts WAV or MP3 up to 20 MB. startSec/endSec really crops PCM or IEEE-float WAV; compressed segments fail before inference. The compatible listening endpoint has no task UUID polling. A repeated requestKey returns its saved job, and an ambiguous submission is marked submission_unknown instead of automatically submitted again. Compare submits two independent listening calls and reports both jobs.
 
 ## Deployment
 

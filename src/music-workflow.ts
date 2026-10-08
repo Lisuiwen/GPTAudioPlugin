@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { GenerateMusicInput } from "./providers/types.js";
 import {
   createRunwareTask,
@@ -6,6 +7,14 @@ import {
   prepareRunwareGeneration,
   type RunwarePredictionState,
 } from "./providers/runware.js";
+import {
+  RUNWARE_LISTENING_MODEL,
+  RunwareListeningError,
+  listeningPrompt,
+  prepareListeningAudio,
+  runRunwareListening,
+  type ListeningRequest,
+} from "./providers/runware-listening.js";
 import { AudioAssets, WorkflowStore, newId, sha256, type RecordValue } from "./workflow-store.js";
 
 export type NativeAudio = { download_url: string; file_id: string; mime_type?: string; file_name?: string };
@@ -26,6 +35,7 @@ type Job = RecordValue & {
   sourceAudioId?: string;
   mode?: string;
   warnings: string[];
+  analyzedRange?: { startSec: number; endSec: number };
   audioFormat?: string;
   providerOutput?: unknown;
   providerCostUsd?: number;
@@ -34,6 +44,24 @@ type Job = RecordValue & {
 };
 class ResultShapeError extends Error {}
 const terminal = new Set(["succeeded", "failed", "canceled"]);
+const StructuredAnalysis = z.object({
+  summary: z.string().max(10000),
+  observations: z.array(z.string().max(3000)).max(50),
+  uncertainties: z.array(z.string().max(3000)).max(50),
+  suggestions: z.array(z.string().max(3000)).max(50),
+});
+
+// Preserve the raw answer when the model does not honor the requested JSON shape.
+export function parseAnalysis(answer: string) {
+  try {
+    const value = JSON.parse(answer.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
+    const parsed = StructuredAnalysis.safeParse(value);
+    if (parsed.success) return { analysis: parsed.data, structuredStatus: "validated" };
+  } catch {
+    // A malformed response remains visible as answer; never invent observations.
+  }
+  return { structuredStatus: "unavailable" };
+}
 // Canonicalize request inputs before deriving the idempotency fingerprint.
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -178,6 +206,74 @@ export class MusicWorkflow {
     }
   }
 
+  // Reserve an owner-scoped job before the one billable compatible-API listening call.
+  async analyze(owner: string, request: ListeningRequest, source: Source, requestKey = newId("request")) {
+    if (requestKey.length > 128 || !/^[\w.-]+$/.test(requestKey)) {
+      throw new Error("requestKey must be 1–128 letters, digits, underscores, dots or hyphens.");
+    }
+    if (!!source.audioId === !!source.audio) throw new Error("Provide exactly one audioId or attachment for listening.");
+    const fingerprint = await sha256(JSON.stringify(canonical({
+      action: "analyze", request, source: { audioId: source.audioId, fileId: source.audio?.file_id },
+    })));
+    const prior = await this.store.findRequest<Job>(owner, requestKey);
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw new Error("requestKey was already used with different inputs. Use a new key for a new operation.");
+      return this.view(prior);
+    }
+
+    const job: Job = {
+      id: newId("job"), kind: "job", revision: 0, action: "analyze", provider: "runware",
+      status: "preparing", requestKey, fingerprint, createdAt: Date.now(), updatedAt: Date.now(), warnings: [],
+    };
+    if (!(await this.store.insert(owner, job, requestKey))) {
+      const existing = await this.store.findRequest<Job>(owner, requestKey);
+      if (!existing) throw new Error("At most three active or unreconciled music jobs are allowed per user.");
+      if (existing.fingerprint !== fingerprint) throw new Error("Concurrent request-key conflict.");
+      return this.view(existing);
+    }
+
+    let started = false;
+    try {
+      if (!this.runwareApiKey?.trim()) throw new Error("RUNWARE_API_KEY is not configured on this deployment.");
+      const asset = await this.source(owner, source);
+      if (!asset) throw new Error("Listening requires audio.");
+      const file = await this.assets.file(owner, asset.id);
+      const audio = await prepareListeningAudio(file, request.analyzedRange);
+      const prompt = listeningPrompt(request);
+      Object.assign(job, {
+        sourceAudioId: asset.id, analyzedRange: request.analyzedRange,
+        model: RUNWARE_LISTENING_MODEL, modelVersion: "3.8-flash", prompt, mode: "analyze",
+        status: "submitting", updatedAt: Date.now(),
+      });
+      if (!(await this.store.update(owner, job))) throw new Error("Job changed before submission; no inference was started.");
+
+      started = true;
+      const result = await runRunwareListening(this.runwareApiKey, prompt, audio);
+      job.predictionId = result.responseId;
+      job.providerCostUsd = result.cost;
+      job.status = "succeeded";
+      job.updatedAt = Date.now();
+      job.result = {
+        answer: result.answer,
+        ...parseAnalysis(result.answer),
+        analyzedRange: request.analyzedRange || null,
+        sourceAudioId: asset.id,
+      };
+      if (!(await this.store.update(owner, job))) return this.view(await this.require(owner, job.id));
+      return this.view(job);
+    } catch (error) {
+      // The compatible endpoint has no task UUID polling: an uncertain call must never be resubmitted.
+      const unknown = started && !(error instanceof RunwareListeningError && error.definitive);
+      job.status = unknown ? "submission_unknown" : "failed";
+      job.updatedAt = Date.now();
+      job.result = { error: unknown
+        ? "Listening submission outcome is unknown. Runware's compatible endpoint cannot reconcile this call; do not retry with a new requestKey unless you accept possible duplicate billing."
+        : error instanceof Error ? error.message : "Listening preparation failed." };
+      await this.store.update(owner, job);
+      return this.view(job);
+    }
+  }
+
   // Load a job only when it belongs to the authenticated owner.
   private async require(owner: string, id: string) {
     const job = await this.store.get<Job>(owner, id);
@@ -189,6 +285,7 @@ export class MusicWorkflow {
   async get(owner: string, id: string) {
     const job = await this.require(owner, id);
     if (terminal.has(job.status)) return this.view(job);
+    if (job.action === "analyze") return this.view(job);
     if (job.provider !== "runware") throw new Error("Legacy listening jobs can no longer be polled.");
     if (job.status === "finalizing" && (job.finalizingUntil || 0) > Date.now()) return this.view(job);
     if (job.providerOutput !== undefined && ["storage_pending", "finalizing"].includes(job.status)) {
@@ -209,6 +306,7 @@ export class MusicWorkflow {
   async cancel(owner: string, id: string) {
     const job = await this.require(owner, id);
     if (terminal.has(job.status)) return this.view(job);
+    if (job.action === "analyze") throw new Error("Runware compatible listening cannot be canceled or reconciled after submission.");
     if (job.provider !== "runware") throw new Error("Legacy listening jobs can no longer be canceled here.");
     if (!job.predictionId) {
       throw new Error("Submission is not yet reconciled. Check this job again; cancellation is not confirmed.");
@@ -306,6 +404,7 @@ export class MusicWorkflow {
       predictionId: job.predictionId,
       model: job.model,
       modelVersion: job.modelVersion,
+      analyzedRange: job.analyzedRange,
       generationMode: job.mode,
       effectivePrompt: job.prompt,
       prompt: job.prompt,
@@ -313,7 +412,7 @@ export class MusicWorkflow {
       updatedAt: job.updatedAt,
       warnings: job.warnings,
       ...(job.providerCostUsd !== undefined ? { providerCostUsd: job.providerCostUsd } : {}),
-      pollAfterSeconds: terminal.has(job.status) ? undefined : 3,
+      pollAfterSeconds: terminal.has(job.status) || (job.action === "analyze" && job.status === "submission_unknown") ? undefined : 3,
       ...job.result,
     };
   }

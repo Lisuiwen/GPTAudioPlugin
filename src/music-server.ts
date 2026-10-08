@@ -3,6 +3,7 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validatio
 import { z } from "zod";
 import { getMusicProvider } from "./providers/index.js";
 import { RUNWARE_MODELS } from "./providers/runware.js";
+import { RUNWARE_LISTENING_MODEL } from "./providers/runware-listening.js";
 import type { MusicWorkflow } from "./music-workflow.js";
 import { newId } from "./workflow-store.js";
 
@@ -15,16 +16,18 @@ export type MusicConnection = {
   runwareApiKey?: string;
 };
 
-export const SERVER_VERSION = "0.9.0";
+export const SERVER_VERSION = "0.10.0";
 export const TOOL_NAMES = [
   "inspect_music_model",
   "generate_music",
+  "analyze_music",
   "get_service_status",
   "register_music_audio",
   "get_music_audio",
   "delete_music_audio",
   "get_music_job",
   "cancel_music_job",
+  "compare_music",
 ];
 
 // The two metadata fields MUST be declared but must NOT be required.
@@ -51,6 +54,19 @@ const requestKey = z
   .describe(
     "Reuse the same key when retrying this operation to prevent duplicate billable submissions; use a new key for a new version."
   );
+const range = {
+  startSec: z.number().min(0).optional(),
+  endSec: z.number().positive().optional(),
+};
+
+// Explicit ranges are cropped from PCM WAV before submitting any paid inference.
+function selectedRange(startSec?: number, endSec?: number) {
+  if (startSec === undefined && endSec === undefined) return undefined;
+  if (endSec === undefined || endSec <= (startSec || 0)) {
+    throw new Error("Specify endSec greater than startSec. Segment listening requires PCM WAV.");
+  }
+  return { startSec: startSec || 0, endSec };
+}
 // Return machine-readable results while marking failed jobs as tool errors.
 function reply(data: Record<string, unknown>) {
   const failed = ["failed", "canceled", "submission_unknown"].includes(String(data.status));
@@ -76,7 +92,7 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     {
       jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
       instructions:
-        "GPTAudioMCP v0.9.0 uses hosted ACE-Step 1.5 on Runware for music generation and source-audio editing. Compile the current conversation into directorPrompt. New music accepts 30–300 seconds; source-audio edits use repaint ranges instead of duration. XL Turbo is the default; choose XL Base for higher quality when the user accepts slower work and higher cost. Never invent file_id, audioId, jobId or model capabilities. Poll get_music_job for unfinished or submission_unknown tasks with the same requestKey. Runware cannot cancel in-flight audio inference or stop its billing.",
+        "GPTAudioMCP v0.10.0 uses Runware ACE-Step for generation and Gemini 3.8 Flash for listening and music comparison. Compile chat context into directorPrompt. New generation accepts 30–300 seconds; source-audio edits use repaint ranges. Never invent file_id, audioId, jobId or model capabilities. Listening and comparison are billable; do not call them for status checks. Segment listening actually crops PCM WAV. A/B comparison performs two independent listens with the same rubric. Poll generation jobs with get_music_job; compatible Gemini listening cannot be reconciled after an ambiguous submission. Runware cannot cancel in-flight inference or stop its billing.",
     }
   );
 
@@ -102,7 +118,7 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     const key = connection.runwareApiKey?.trim();
     if (!key) {
       throw new Error(
-        "Runware generation is not configured. Add RUNWARE_API_KEY to this deployment, then retry."
+        "Runware is not configured. Add RUNWARE_API_KEY to this deployment, then retry."
       );
     }
     return key;
@@ -120,13 +136,14 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     },
     async () => reply({
       version: SERVER_VERSION,
-      schemaRevision: "music-tools-v090-runware-only",
+      schemaRevision: "music-tools-v0100-runware-listening",
       buildSha: connection.buildSha || "unknown",
       runtime: connection.runtime || "node",
       tools: TOOL_NAMES,
-      providers: { generation: "runware" },
-      models: { runware: RUNWARE_MODELS },
+      providers: { generation: "runware", listening: "runware" },
+      models: { runware: RUNWARE_MODELS, listening: RUNWARE_LISTENING_MODEL },
       runwareConfigured: !!connection.runwareApiKey?.trim(),
+      segmentFormats: ["PCM WAV", "IEEE-float WAV"],
       persistentJobs: !!connection.workflow,
       durableAudio: !!connection.workflow?.assets.bucket,
       completionPersistence: "Runware URLs normally last seven days. Configure AUDIO_BUCKET for durable service-owned copies.",
@@ -157,7 +174,7 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     {
       title: "Generate or transform music",
       description:
-        "GPTAudioMCP v0.9.0. Generate or edit music with hosted ACE-Step 1.5 on Runware. XL Turbo is the default. Supports new music, audio-driven reference/cover, bounded repaint, and continuation/extension via repaint ranges. New generation supports 30–300 seconds. Source-audio requests do not accept duration. Returns audio immediately when complete or a resumable jobId.",
+        "GPTAudioMCP v0.10.0. Generate or edit music with hosted ACE-Step 1.5 on Runware. XL Turbo is the default. Supports new music, audio-driven reference/cover, bounded repaint, and continuation/extension via repaint ranges. New generation supports 30–300 seconds. Source-audio requests do not accept duration. Returns audio immediately when complete or a resumable jobId.",
       inputSchema: {
         model,
         requestKey,
@@ -246,6 +263,41 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     }
   );
 
+  // Restored listening tool accepts an attachment or an existing owner-scoped audioId.
+  server.registerTool(
+    "analyze_music",
+    {
+      title: "Listen to music",
+      description:
+        "Billable listening through Runware Gemini 3.8 Flash. Analyze actual audio from a native attachment or saved audioId. Optional startSec/endSec crops PCM WAV before submission. Returns structured observations, uncertainties and creative suggestions when the model follows the JSON rubric.",
+      inputSchema: {
+        requestKey,
+        audio: OpenAIFileSchema.optional(),
+        audioId,
+        question: z.string().min(1).max(10000),
+        conversationSummary: z.string().max(10000).optional(),
+        analysisFocus: z.array(z.string().min(1)).max(12).optional(),
+        ...range,
+      },
+      annotations: billable,
+      _meta: metadata(["audio"]),
+    },
+    async ({ audio, audioId: sourceId, requestKey: key, startSec, endSec, ...request }) => {
+      try {
+        const id = requireOwner();
+        runwareKey();
+        return reply(await workflow().analyze(
+          id,
+          { ...request, analyzedRange: selectedRange(startSec, endSec) },
+          { audioId: sourceId, audio },
+          key
+        ));
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
+
 
   server.registerTool(
     "register_music_audio",
@@ -322,7 +374,7 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     {
       title: "Check music task",
       description:
-        "Check a previously returned jobId. Reconcile a Runware task by UUID and retry completed-output import without starting another inference.",
+        "Check a returned jobId. Generation tasks can be reconciled by Runware UUID; Gemini 3.8 Flash listening uses a synchronous compatible endpoint and cannot reconcile an uncertain submission.",
       inputSchema: { jobId: z.string().min(1) },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: metadata(),
@@ -343,7 +395,7 @@ export function createMusicServer(connection: MusicConnection): McpServer {
     {
       title: "Cancel music task",
       description:
-        "Read a finished task or report that Runware cannot cancel an in-flight inference or stop its billing.",
+        "Read a finished task or report that Runware cannot cancel an in-flight inference or stop its billing. Gemini 3.8 Flash listening cannot be canceled.",
       inputSchema: { jobId: z.string().min(1) },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: metadata(),
@@ -353,6 +405,52 @@ export function createMusicServer(connection: MusicConnection): McpServer {
         return reply(
           await workflow().cancel(requireOwner(), jobId)
         );
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
+
+  // A/B comparison keeps two independent jobs so each audio has an auditable critique.
+  server.registerTool(
+    "compare_music",
+    {
+      title: "Compare two music versions",
+      description:
+        "Submit TWO billable Gemini 3.8 Flash listens through Runware with the same question and range. Poll returned job IDs as needed; compare only completed audible evidence. Both audioIds must belong to the current user.",
+      inputSchema: {
+        audioIdA: z.string().min(1),
+        audioIdB: z.string().min(1),
+        question: z.string().min(1).max(10000),
+        conversationSummary: z.string().max(10000).optional(),
+        requestKey,
+        ...range,
+      },
+      annotations: billable,
+      _meta: metadata(),
+    },
+    async (args) => {
+      try {
+        const id = requireOwner();
+        const w = workflow();
+        runwareKey();
+        await w.assets.require(id, args.audioIdA);
+        await w.assets.require(id, args.audioIdB);
+        const key = args.requestKey || newId("compare");
+        if (key.length > 126 || !/^[\w.-]+$/.test(key)) throw new Error("Comparison requestKey must be at most 126 letters, digits, underscores, dots or hyphens.");
+        const request = {
+          question: args.question,
+          conversationSummary: args.conversationSummary,
+          analyzedRange: selectedRange(args.startSec, args.endSec),
+        };
+        const a = await w.analyze(id, request, { audioId: args.audioIdA }, `${key}.a`);
+        const b = await w.analyze(id, request, { audioId: args.audioIdB }, `${key}.b`);
+        return reply({
+          requestKey: key,
+          comparisonType: "independent-listening-same-rubric",
+          jobs: [{ label: "A", ...a }, { label: "B", ...b }],
+          instruction: "Compare only completed evidence. Report failed or uncertain analyses explicitly; do not resubmit an uncertain call automatically.",
+        });
       } catch (error) {
         return failure(error);
       }

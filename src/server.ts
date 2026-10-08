@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMusicServer, SERVER_VERSION } from "./music-server.js";
 import { DEFAULT_MODEL } from "./providers/index.js";
+import { RUNWARE_LISTENING_MODEL } from "./providers/runware-listening.js";
 import { createLocalWorkflow } from "./node-workflow.js";
 
 const MCP_PATH = "/mcp";
@@ -43,8 +44,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       version: SERVER_VERSION,
       buildSha: process.env.BUILD_SHA || "unknown",
       mcp: MCP_PATH,
-      providers: { generation: "runware" },
+      providers: { generation: "runware", listening: "runware" },
       defaultModel: DEFAULT_MODEL,
+      listeningModel: RUNWARE_LISTENING_MODEL,
       runwareConfigured: !!process.env.RUNWARE_API_KEY?.trim(),
     }));
     return;

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.9.0",
-  "description": "Generate and edit music with hosted ACE-Step 1.5 on Runware.",
+  "version": "0.10.0",
+  "description": "Generate, edit and critique music through Runware.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -20,8 +20,8 @@
     "com.openai": {
       "interface": {
         "displayName": "GPT Audio Plugin",
-        "shortDescription": "Generate and edit music with ACE-Step 1.5.",
-        "longDescription": "GPTAudioMCP 0.9.0 uses hosted ACE-Step 1.5 on Runware for music generation and reference-audio editing. XL Turbo is the default; XL Base is available for higher-quality, slower edits. The Site manages the Runware key, so no personal provider connection is required.",
+        "shortDescription": "Generate, edit and critique music with Runware.",
+        "longDescription": "GPTAudioMCP 0.10.0 uses Runware ACE-Step 1.5 for music generation and reference-audio editing, plus Runware Gemini 3.8 Flash for listening critique and A/B comparison. The Site manages the Runware key, so no personal provider connection is required.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [

@@ -1,4 +1,4 @@
-// Sites Worker entry point for the owner-scoped, Runware-only music service.
+// Sites Worker entry point for the owner-scoped Runware generation and listening service.
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createMusicServer, SERVER_VERSION } from "./music-server.js";
 import { MusicWorkflow } from "./music-workflow.js";
@@ -27,7 +27,7 @@ function services(env: Environment): MusicWorkflow {
 
 // The old connection URL now shows a read-only service page with no credential form.
 function homePage(configured: boolean): Response {
-  const state = configured ? "Runware 已配置，音乐生成与编辑可用。" : "Runware 尚未配置，请在 Site 环境设置中添加 RUNWARE_API_KEY。";
+  const state = configured ? "Runware 已配置，音乐生成、编辑与听音评价可用。" : "Runware 尚未配置，请在 Site 环境设置中添加 RUNWARE_API_KEY。";
   const html = [
     '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -35,7 +35,7 @@ function homePage(configured: boolean): Response {
     '<style>body{font:16px/1.65 system-ui,sans-serif;background:#0c1220;color:#e7edf9;margin:0;padding:32px 20px}',
     'main{max-width:560px;margin:8vh auto}h1{font-size:28px;color:#a1c1ff}</style></head>',
     '<body><main><h1>GPT Audio ', SERVER_VERSION, '</h1><p>', state, '</p>',
-    '<p>在 ChatGPT 中使用 GPT Audio MCP 生成或编辑音乐。本站无需填写个人服务令牌。</p>',
+    '<p>在 ChatGPT 中使用 GPT Audio MCP 生成、编辑或评价音乐。本站无需填写个人服务令牌。</p>',
     '</main></body></html>',
   ].join("");
   return new Response(html, {

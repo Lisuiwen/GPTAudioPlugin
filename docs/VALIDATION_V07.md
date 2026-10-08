@@ -1,6 +1,6 @@
 # v0.7 validation — 2026-10-03
 
-Historical record only. GPTAudioMCP 0.9.0 uses Runware for generation and has retired the listening and comparison tools described below.
+Historical record only. GPTAudioMCP 0.10.0 uses Runware for generation and listening. The Replicate listening workflow documented below was retired; the restored tools now use Runware Gemini 3.8 Flash.
 
 ## Tested environment
 

@@ -24,7 +24,7 @@ async function save() {
   await writeFile(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
 }
 
-const client = new Client({ name: "gpt-audio-live-regression", version: "0.9.0" });
+const client = new Client({ name: "gpt-audio-live-regression", version: "0.10.0" });
 
 // Unwrap one MCP result and reject service-reported errors.
 async function call(name, args = {}) {

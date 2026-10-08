@@ -1,4 +1,4 @@
-// Read-only catalog check for the local Runware-only MCP endpoint.
+// Read-only catalog check for the local Runware generation and listening endpoint.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,7 +14,9 @@ try {
   const { tools } = await client.listTools();
   const names = tools.map((tool) => tool.name).sort();
   const expected = [
+    "analyze_music",
     "cancel_music_job",
+    "compare_music",
     "delete_music_audio",
     "generate_music",
     "get_music_audio",
@@ -33,6 +35,7 @@ try {
   const status = response.structuredContent;
   assert.equal(status?.version, manifest.version);
   assert.equal(status?.providers?.generation, "runware");
+  assert.equal(status?.providers?.listening, "runware");
   assert.equal(status?.tools?.length, expected.length);
   console.log(JSON.stringify({ endpoint: endpoint.href, version: status.version, tools: names, runwareConfigured: status.runwareConfigured }, null, 2));
   console.log("Only discovery and status were called; no billable inference was created.");
