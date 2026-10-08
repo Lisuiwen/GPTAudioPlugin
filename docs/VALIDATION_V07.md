@@ -1,5 +1,7 @@
 # v0.7 validation — 2026-10-03
 
+Historical record only. GPTAudioMCP 0.9.0 uses Runware for generation and has retired the listening and comparison tools described below.
+
 ## Tested environment
 
 - Machine: Brook, Windows; separate `GPTAudioPlugin-workflow-v07` worktree.

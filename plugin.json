@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gpt-audio-plugin",
-  "version": "0.8.0",
-  "description": "Generate and edit music with hosted ACE-Step 1.5 on Runware, with Replicate-backed listening for grounded music analysis.",
+  "version": "0.9.0",
+  "description": "Generate and edit music with hosted ACE-Step 1.5 on Runware.",
   "author": {
     "name": "Lisuiwen"
   },
@@ -11,7 +11,6 @@
   "keywords": [
     "audio",
     "music",
-    "replicate",
     "chatgpt",
     "mcp",
     "runware",
@@ -21,8 +20,8 @@
     "com.openai": {
       "interface": {
         "displayName": "GPT Audio Plugin",
-        "shortDescription": "Generate/edit with ACE-Step 1.5 or analyze attached audio.",
-        "longDescription": "GPTAudioMCP 0.8.0 routes music generation and reference-audio editing to hosted ACE-Step 1.5 on Runware (XL Turbo by default, XL Base available for higher-quality edits). Listening and critique remain on the connected Replicate audio model, so generation no longer requires a user Replicate credential.",
+        "shortDescription": "Generate and edit music with ACE-Step 1.5.",
+        "longDescription": "GPTAudioMCP 0.9.0 uses hosted ACE-Step 1.5 on Runware for music generation and reference-audio editing. XL Turbo is the default; XL Base is available for higher-quality, slower edits. The Site manages the Runware key, so no personal provider connection is required.",
         "developerName": "Lisuiwen",
         "category": "Creativity",
         "capabilities": [
@@ -32,7 +31,6 @@
         "websiteURL": "https://github.com/Lisuiwen/GPTAudioPlugin",
         "defaultPrompt": [
           "Generate music from our current conversation.",
-          "Listen to the audio file I attached and critique the arrangement, instrumentation, structure, mood, and production.",
           "Use the audio file I attached and our conversation as the creative direction."
         ]
       }

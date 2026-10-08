@@ -1,5 +1,14 @@
-import type { SitesDatabase } from "./sites-store.js";
 import { downloadAudio, MAX_AUDIO_BYTES } from "./audio.js";
+
+// Keep D1 access independent of schema authoring and retired connection storage.
+export type SitesDatabase = {
+  prepare(sql: string): {
+    bind(...values: Array<string | number | null>): {
+      first<T>(): Promise<T | null>;
+      run(): Promise<unknown>;
+    };
+  };
+};
 
 export type AudioBucket = {
   put(key: string, value: ArrayBuffer, options?: { httpMetadata: { contentType: string } }): Promise<unknown>;

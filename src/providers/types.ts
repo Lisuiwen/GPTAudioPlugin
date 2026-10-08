@@ -1,4 +1,6 @@
-export type MusicProviderId = "replicate" | "runware";
+// Shared capability and generation contracts for hosted Runware models.
+// Production music inference is handled by the single Runware provider.
+export type MusicProviderId = "runware";
 export type GenerationMode = "auto" | "generate" | "cover" | "reference" | "repaint" | "continue";
 export type ModelCapabilities = {
   provider: MusicProviderId;
@@ -51,31 +53,9 @@ export type GenerateMusicResult = {
   referenceAudioUsed?: boolean;
   capabilities: ModelCapabilities;
 };
-export type AnalyzeMusicInput = {
-  model?: string;
-  question: string;
-  conversationSummary?: string;
-  analysisFocus?: string[];
-  audioUrl: string;
-  audioFile?: File;
-  audioName?: string;
-  audioMimeType?: string;
-  structured?: boolean;
-  analyzedRange?: { startSec: number; endSec: number };
-};
-export type AnalyzeMusicResult = {
-  provider: MusicProviderId;
-  model: string;
-  modelVersion?: string;
-  prompt: string;
-  answer: string;
-  capabilities: ModelCapabilities;
-};
 export interface MusicProvider {
   readonly id: MusicProviderId;
   readonly defaultModel: string;
-  readonly defaultAnalysisModel: string;
   inspectModel(credential: string, model?: string): Promise<ModelCapabilities>;
   generate(credential: string, request: GenerateMusicInput): Promise<GenerateMusicResult>;
-  analyze(credential: string, request: AnalyzeMusicInput): Promise<AnalyzeMusicResult>;
 }

@@ -1,7 +1,6 @@
+// Hosted Runware ACE-Step adapter for generation and source-audio editing.
 import { Buffer } from "buffer";
 import type {
-  AnalyzeMusicInput,
-  AnalyzeMusicResult,
   GenerateMusicInput,
   GenerateMusicResult,
   ModelCapabilities,
@@ -434,18 +433,10 @@ async function generate(
   };
 }
 
-async function analyze(
-  _credential: string,
-  _request: AnalyzeMusicInput
-): Promise<AnalyzeMusicResult> {
-  throw new Error("Runware is configured for music generation/editing only. Audio listening remains on Replicate.");
-}
-
+// This is the only active provider exposed by the music service.
 export const runwareProvider: MusicProvider = {
   id: "runware",
   defaultModel: RUNWARE_MODELS.fast,
-  defaultAnalysisModel: "",
   inspectModel: inspectRunwareModel,
   generate,
-  analyze,
 };

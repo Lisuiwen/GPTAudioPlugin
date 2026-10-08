@@ -1,5 +1,7 @@
 import { integer, sqliteTable, text, primaryKey, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+// Historical table remains in the schema so future migrations do not drop stored data.
+// The current application never reads or writes these retired connection records.
 export const replicateConnections = sqliteTable("replicate_connections", {
   userId: text("user_id").primaryKey(),
   username: text("username").notNull(),

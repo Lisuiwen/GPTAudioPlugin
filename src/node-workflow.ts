@@ -1,10 +1,10 @@
+// Local development storage mirrors the Site's D1 and optional audio bucket.
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { MusicWorkflow } from "./music-workflow.js";
-import { AudioAssets, WorkflowStore, type AudioBucket } from "./workflow-store.js";
-import type { SitesDatabase } from "./sites-store.js";
+import { AudioAssets, WorkflowStore, type AudioBucket, type SitesDatabase } from "./workflow-store.js";
 
 export const MUSIC_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS music_records (
  user_id TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -12,6 +12,7 @@ export const MUSIC_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS music_records (
  updated_at INTEGER NOT NULL, PRIMARY KEY(user_id,id), UNIQUE(user_id,request_key)
 );`;
 
+// Build a local-only workflow; production identity remains with the Sites gateway.
 export function createLocalWorkflow(directory: string, runwareApiKey = process.env.RUNWARE_API_KEY) {
   const root = resolve(directory);
   mkdirSync(root, { recursive: true });

@@ -22,14 +22,12 @@ if (Test-Path $zip) {
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $staging ".codex-plugin") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $staging "skills\audio-creator") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $staging "skills\audio-listener") -Force | Out-Null
 
 Copy-Item (Join-Path $root "plugin.json") $staging
 Copy-Item (Join-Path $root "mcp.json") $staging
 Copy-Item (Join-Path $root ".mcp.json") $staging
 Copy-Item (Join-Path $root ".codex-plugin\plugin.json") (Join-Path $staging ".codex-plugin\plugin.json")
 Copy-Item (Join-Path $root "skills\audio-creator\SKILL.md") (Join-Path $staging "skills\audio-creator\SKILL.md")
-Copy-Item (Join-Path $root "skills\audio-listener\SKILL.md") (Join-Path $staging "skills\audio-listener\SKILL.md")
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
@@ -45,7 +43,7 @@ try {
 
 $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try {
-  foreach ($entry in @("plugin.json", "mcp.json", ".mcp.json", ".codex-plugin/plugin.json", "skills/audio-creator/SKILL.md", "skills/audio-listener/SKILL.md")) {
+  foreach ($entry in @("plugin.json", "mcp.json", ".mcp.json", ".codex-plugin/plugin.json", "skills/audio-creator/SKILL.md")) {
     if (-not $archive.GetEntry($entry)) {
       throw "Missing plugin package entry: $entry"
     }

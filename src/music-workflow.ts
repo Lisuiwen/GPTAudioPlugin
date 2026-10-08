@@ -1,21 +1,9 @@
-import { z } from "zod";
-import type { AnalyzeMusicInput, GenerateMusicInput, MusicProviderId } from "./providers/types.js";
-import {
-  createPrediction as createReplicatePrediction,
-  getPrediction as getReplicatePrediction,
-  cancelPrediction as cancelReplicatePrediction,
-  prepareAnalysis,
-  outputText,
-  outputUrls,
-  type PredictionPlan,
-  type PredictionState,
-} from "./providers/replicate.js";
+import type { GenerateMusicInput } from "./providers/types.js";
 import {
   createRunwareTask,
   getRunwareTask,
   cancelRunwareTask,
   prepareRunwareGeneration,
-  type RunwarePlan,
   type RunwarePredictionState,
 } from "./providers/runware.js";
 import { AudioAssets, WorkflowStore, newId, sha256, type RecordValue } from "./workflow-store.js";
@@ -24,8 +12,8 @@ export type NativeAudio = { download_url: string; file_id: string; mime_type?: s
 export type Source = { audioId?: string; audio?: NativeAudio };
 type Job = RecordValue & {
   kind: "job";
-  action: "generate" | "analyze";
-  provider?: MusicProviderId;
+  action: string;
+  provider?: string;
   status: string;
   requestKey: string;
   fingerprint: string;
@@ -38,7 +26,6 @@ type Job = RecordValue & {
   sourceAudioId?: string;
   mode?: string;
   warnings: string[];
-  analyzedRange?: { startSec: number; endSec: number };
   audioFormat?: string;
   providerOutput?: unknown;
   providerCostUsd?: number;
@@ -47,22 +34,7 @@ type Job = RecordValue & {
 };
 class ResultShapeError extends Error {}
 const terminal = new Set(["succeeded", "failed", "canceled"]);
-const StructuredAnalysis = z.object({
-  summary: z.string().max(10000),
-  observations: z.array(z.string().max(3000)).max(50),
-  uncertainties: z.array(z.string().max(3000)).max(50),
-  suggestions: z.array(z.string().max(3000)).max(50),
-});
-export function parseAnalysis(answer: string): { analysis?: z.infer<typeof StructuredAnalysis>; structuredStatus: string } {
-  try {
-    const value = JSON.parse(answer.trim().replace(/^\`\`\`(?:json)?\s*/, "").replace(/\s*\`\`\`$/, ""));
-    const parsed = StructuredAnalysis.safeParse(value);
-    if (parsed.success) return { analysis: parsed.data, structuredStatus: "validated" };
-  } catch {
-    /* Preserve the raw answer; never fabricate structured observations. */
-  }
-  return { structuredStatus: "unavailable" };
-}
+// Canonicalize request inputs before deriving the idempotency fingerprint.
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") {
@@ -75,9 +47,11 @@ function canonical(value: unknown): unknown {
   }
   return value;
 }
-type ProviderPlan = PredictionPlan | RunwarePlan;
-type ProviderState = PredictionState | RunwarePredictionState;
 
+// Runware returns audio URLs as a flat list; legacy provider response shapes are not accepted.
+function runwareAudioUrls(output: unknown): string[] {
+  return Array.isArray(output) ? output.filter((value): value is string => typeof value === "string") : [];
+}
 export class MusicWorkflow {
   constructor(
     readonly store: WorkflowStore,
@@ -85,6 +59,7 @@ export class MusicWorkflow {
     readonly runwareApiKey?: string
   ) {}
 
+  // Resolve a user-owned audio source before a provider submission.
   private async source(owner: string, source: Source) {
     if (source.audioId && source.audio) throw new Error("Pass an audioId or an attachment, not both.");
     if (source.audioId) return this.assets.require(owner, source.audioId);
@@ -98,11 +73,10 @@ export class MusicWorkflow {
     return undefined;
   }
 
+  // Reserve the request key and task UUID before the billable Runware submission.
   async submit(
     owner: string,
-    replicateToken: string,
-    action: "generate" | "analyze",
-    request: GenerateMusicInput | AnalyzeMusicInput,
+    request: GenerateMusicInput,
     source: Source,
     requestKey = newId("request")
   ) {
@@ -110,13 +84,10 @@ export class MusicWorkflow {
       throw new Error("requestKey must be 1–128 letters, digits, underscores, dots or hyphens.");
     }
     if (source.audioId && source.audio) throw new Error("Pass exactly one audio source.");
-    if (action === "analyze" && !source.audioId && !source.audio) {
-      throw new Error("Analysis requires an audioId or attachment.");
-    }
     const fingerprint = await sha256(
       JSON.stringify(
         canonical({
-          action,
+          action: "generate",
           request,
           source: { audioId: source.audioId, fileId: source.audio?.file_id },
         })
@@ -134,8 +105,8 @@ export class MusicWorkflow {
       id: newId("job"),
       kind: "job",
       revision: 0,
-      action,
-      provider: action === "generate" ? "runware" : "replicate",
+      action: "generate",
+      provider: "runware",
       status: "preparing",
       requestKey,
       fingerprint,
@@ -160,33 +131,15 @@ export class MusicWorkflow {
       const file = audio ? await this.assets.file(owner, audio.id) : undefined;
       job.sourceAudioId = audio?.id;
 
-      let plan: ProviderPlan;
-      if (action === "generate") {
-        if (!this.runwareApiKey?.trim()) {
-          throw new Error("Runware generation is not configured on this deployment.");
-        }
-        const runwarePlan = prepareRunwareGeneration({
-          ...(request as GenerateMusicInput),
-          referenceAudioFile: file,
-        });
-        plan = runwarePlan;
-        job.provider = "runware";
-        // Persist the Runware task UUID before the network call so an ambiguous
-        // response can be reconciled with getTaskDetails instead of resubmitted.
-        job.predictionId = runwarePlan.taskUUID;
-      } else {
-        if (!replicateToken?.trim()) {
-          throw new Error("Connect Replicate before using audio listening/analysis.");
-        }
-        plan = await prepareAnalysis(replicateToken, {
-          ...(request as AnalyzeMusicInput),
-          audioUrl: "",
-          audioFile: file,
-          structured: true,
-        });
-        job.provider = "replicate";
+      if (!this.runwareApiKey?.trim()) {
+        throw new Error("Runware generation is not configured on this deployment.");
       }
-
+      const plan = prepareRunwareGeneration({
+        ...request,
+        referenceAudioFile: file,
+      });
+      // Persist the task UUID before submission so an uncertain response can be reconciled.
+      job.predictionId = plan.taskUUID;
       Object.assign(job, {
         model: plan.model,
         modelVersion: plan.version,
@@ -195,19 +148,14 @@ export class MusicWorkflow {
         warnings: plan.warnings,
         status: "submitting",
         updatedAt: Date.now(),
-        analyzedRange: (request as AnalyzeMusicInput).analyzedRange,
-        audioFormat: (request as GenerateMusicInput).audioFormat || "mp3",
+        audioFormat: request.audioFormat || "mp3",
       });
       if (!(await this.store.update(owner, job))) {
         throw new Error("Job changed before submission; no prediction was started.");
       }
 
       startingPrediction = true;
-      const prediction =
-        action === "generate"
-          ? await createRunwareTask(this.runwareApiKey!, plan as RunwarePlan)
-          : await createReplicatePrediction(replicateToken, plan as PredictionPlan);
-
+      const prediction = await createRunwareTask(this.runwareApiKey!, plan);
       job.predictionId = prediction.id;
       job.status = prediction.status;
       if (prediction.metrics?.cost !== undefined) job.providerCostUsd = prediction.metrics.cost;
@@ -215,9 +163,7 @@ export class MusicWorkflow {
       if (!(await this.store.update(owner, job))) throw new Error("Cannot persist prediction receipt.");
       return this.apply(owner, job, prediction);
     } catch (error) {
-      // After a provider POST may have been accepted, do not automatically
-      // resubmit. Runware can reconcile by taskUUID; Replicate preserves the
-      // existing conservative submission_unknown behavior.
+      // An uncertain provider response must be reconciled by task UUID, never resubmitted.
       job.status = startingPrediction ? "submission_unknown" : "failed";
       job.updatedAt = Date.now();
       job.result = {
@@ -232,15 +178,18 @@ export class MusicWorkflow {
     }
   }
 
+  // Load a job only when it belongs to the authenticated owner.
   private async require(owner: string, id: string) {
     const job = await this.store.get<Job>(owner, id);
     if (!job || job.kind !== "job") throw new Error("Job not found or not owned by this user.");
     return job;
   }
 
-  async get(owner: string, replicateToken: string, id: string) {
+  // Read an existing job without creating another inference task.
+  async get(owner: string, id: string) {
     const job = await this.require(owner, id);
     if (terminal.has(job.status)) return this.view(job);
+    if (job.provider !== "runware") throw new Error("Legacy listening jobs can no longer be polled.");
     if (job.status === "finalizing" && (job.finalizingUntil || 0) > Date.now()) return this.view(job);
     if (job.providerOutput !== undefined && ["storage_pending", "finalizing"].includes(job.status)) {
       return this.apply(owner, job, {
@@ -252,38 +201,33 @@ export class MusicWorkflow {
     }
     if (!job.predictionId) return this.view(job);
 
-    if (job.provider === "runware") {
-      if (!this.runwareApiKey?.trim()) throw new Error("Runware generation is not configured on this deployment.");
-      return this.apply(owner, job, await getRunwareTask(this.runwareApiKey, job.predictionId));
-    }
-    if (!replicateToken?.trim()) throw new Error("Connect Replicate before polling this listening task.");
-    return this.apply(owner, job, await getReplicatePrediction(replicateToken, job.predictionId));
+    if (!this.runwareApiKey?.trim()) throw new Error("Runware generation is not configured on this deployment.");
+    return this.apply(owner, job, await getRunwareTask(this.runwareApiKey, job.predictionId));
   }
 
-  async cancel(owner: string, replicateToken: string, id: string) {
+  // Report Runware cancellation limits without claiming that billing has stopped.
+  async cancel(owner: string, id: string) {
     const job = await this.require(owner, id);
     if (terminal.has(job.status)) return this.view(job);
+    if (job.provider !== "runware") throw new Error("Legacy listening jobs can no longer be canceled here.");
     if (!job.predictionId) {
       throw new Error("Submission is not yet reconciled. Check this job again; cancellation is not confirmed.");
     }
 
-    if (job.provider === "runware") {
-      if (!this.runwareApiKey?.trim()) throw new Error("Runware generation is not configured on this deployment.");
-      const state = await cancelRunwareTask(this.runwareApiKey, job.predictionId);
-      return this.apply(owner, job, state);
-    }
-    if (!replicateToken?.trim()) throw new Error("Connect Replicate before canceling this listening task.");
-    return this.apply(owner, job, await cancelReplicatePrediction(replicateToken, job.predictionId));
+    if (!this.runwareApiKey?.trim()) throw new Error("Runware generation is not configured on this deployment.");
+    const state = await cancelRunwareTask(this.runwareApiKey, job.predictionId);
+    return this.apply(owner, job, state);
   }
 
-  private async apply(owner: string, job: Job, prediction: ProviderState): Promise<Record<string, unknown>> {
+  // Persist provider progress and import completed audio under the job owner's identity.
+  private async apply(owner: string, job: Job, prediction: RunwarePredictionState): Promise<Record<string, unknown>> {
     if (prediction.metrics?.cost !== undefined) job.providerCostUsd = prediction.metrics.cost;
 
     if (prediction.status !== "succeeded") {
       job.status = prediction.status;
       job.updatedAt = Date.now();
       if (["failed", "canceled"].includes(prediction.status)) {
-        const providerName = job.provider === "runware" ? "Runware" : "Replicate";
+        const providerName = "Runware";
         const detail =
           typeof prediction.error === "string"
             ? prediction.error
@@ -304,49 +248,35 @@ export class MusicWorkflow {
     if (!(await this.store.update(owner, job))) return this.view(await this.require(owner, job.id));
 
     try {
-      if (job.action === "analyze") {
-        const answer = outputText(prediction.output);
-        if (!answer) throw new ResultShapeError("No analysis text was returned.");
-        job.result = {
-          answer,
-          ...parseAnalysis(answer),
-          analyzedRange: job.analyzedRange || null,
-          sourceAudioId: job.sourceAudioId,
-        };
-      } else {
-        const urls = outputUrls(prediction.output);
-        if (!urls.length) throw new ResultShapeError("No generated audio was returned.");
-        if (urls.length > 4) {
-          throw new Error("Unexpectedly many output files; inspect the provider task before importing them.");
-        }
-        const audios = [];
-        const providerRetentionMs =
-          job.provider === "runware" ? 7 * 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
-        for (let index = 0; index < urls.length; index++) {
-          const audio = await this.assets.register(
-            owner,
-            {
-              url: urls[index],
-              fileName: `${job.id}-${index}.${job.audioFormat}`,
-              mimeType: job.audioFormat === "wav" ? "audio/wav" : "audio/mpeg",
-              expiresAt: job.createdAt + providerRetentionMs,
-              parentAudioId: job.sourceAudioId,
-            },
-            `audio_${job.id}_${index}`
-          );
-          audios.push(this.assets.view(audio));
-        }
-        job.result = {
-          audioId: audios[0].audioId,
-          audioIds: audios.map((audio) => audio.audioId),
-          audioUrl: urls[0],
-          audioUrls: urls,
-          audios,
-          referenceAudioUsed: !!job.sourceAudioId,
-          sourceAudioId: job.sourceAudioId,
-          ...(job.providerCostUsd !== undefined ? { providerCostUsd: job.providerCostUsd } : {}),
-        };
+      const urls = runwareAudioUrls(prediction.output);
+      if (!urls.length) throw new ResultShapeError("No generated audio was returned.");
+      if (urls.length > 4) throw new Error("Unexpectedly many output files.");
+      const audios = [];
+      const providerRetentionMs = 7 * 24 * 60 * 60 * 1000;
+      for (let index = 0; index < urls.length; index++) {
+        const audio = await this.assets.register(
+          owner,
+          {
+            url: urls[index],
+            fileName: job.id + "-" + index + "." + job.audioFormat,
+            mimeType: job.audioFormat === "wav" ? "audio/wav" : "audio/mpeg",
+            expiresAt: job.createdAt + providerRetentionMs,
+            parentAudioId: job.sourceAudioId,
+          },
+          "audio_" + job.id + "_" + index
+        );
+        audios.push(this.assets.view(audio));
       }
+      job.result = {
+        audioId: audios[0].audioId,
+        audioIds: audios.map((audio) => audio.audioId),
+        audioUrl: urls[0],
+        audioUrls: urls,
+        audios,
+        referenceAudioUsed: !!job.sourceAudioId,
+        sourceAudioId: job.sourceAudioId,
+        ...(job.providerCostUsd !== undefined ? { providerCostUsd: job.providerCostUsd } : {}),
+      };
       job.status = "succeeded";
       delete job.providerOutput;
     } catch (error) {
@@ -356,7 +286,7 @@ export class MusicWorkflow {
           error instanceof ResultShapeError
             ? error.message
             : "Provider generation completed, but output import is incomplete. Poll the same job to retry import without generating again.",
-        audioUrls: job.action === "generate" ? outputUrls(prediction.output) : undefined,
+        audioUrls: runwareAudioUrls(prediction.output),
         ...(job.providerCostUsd !== undefined ? { providerCostUsd: job.providerCostUsd } : {}),
       };
     }
@@ -366,12 +296,13 @@ export class MusicWorkflow {
     return this.view(job);
   }
 
+  // Return a stable, owner-scoped job view to MCP callers.
   view(job: Job): Record<string, unknown> {
     return {
       jobId: job.id,
       requestKey: job.requestKey,
       status: job.status,
-      provider: job.provider || "replicate",
+      provider: job.provider || "legacy",
       predictionId: job.predictionId,
       model: job.model,
       modelVersion: job.modelVersion,

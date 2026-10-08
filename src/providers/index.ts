@@ -1,4 +1,4 @@
-import { replicateProvider } from "./replicate.js";
+// Resolve the sole active music provider and reject retired provider names.
 import { runwareProvider } from "./runware.js";
 import type {
   MusicProvider,
@@ -6,13 +6,11 @@ import type {
 } from "./types.js";
 
 const providers: Record<MusicProviderId, MusicProvider> = {
-  replicate: replicateProvider,
   runware: runwareProvider,
 };
 
 export const DEFAULT_PROVIDER_ID: MusicProviderId = "runware";
 export const DEFAULT_MODEL = runwareProvider.defaultModel;
-export const DEFAULT_ANALYSIS_MODEL = replicateProvider.defaultAnalysisModel;
 
 export function getMusicProvider(
   provider: string | undefined
@@ -32,8 +30,6 @@ export function getMusicProvider(
 }
 
 export type {
-  AnalyzeMusicInput,
-  AnalyzeMusicResult,
   GenerateMusicInput,
   GenerateMusicResult,
   ModelCapabilities,
