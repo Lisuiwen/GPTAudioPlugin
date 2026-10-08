@@ -3,7 +3,7 @@
   "mcpServers": {
     "gpt-audio": {
       "type": "streamable-http",
-      "url": "http://127.0.0.1:8787/mcp"
+      "url": "https://gpt-audio-mcp-debug.suiwenli4.chatgpt.site/mcp"
     }
   }
 }
